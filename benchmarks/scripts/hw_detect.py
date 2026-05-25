@@ -544,6 +544,7 @@ def get_benchmark_config(
     vram_mb: int,
     test_mode: bool = False,
     minimum_mode: bool = False,
+    toy_mode: bool = False,
 ) -> dict[str, dict]:
     """Return benchmark configuration appropriate for the given GPU VRAM.
 
@@ -553,10 +554,21 @@ def get_benchmark_config(
         minimum_mode: If True, restrict to SF_min + SF_max only (2 SFs),
             reuse TEST_QUERIES, and drop every microbench_* benchmark.
             Designed so the whole A+B+C pipeline fits in ~8 hours.
+        toy_mode: Smallest possible end-to-end smoke of the A+B+C pipeline.
+            Keeps ONLY tpch, a single query, and the single largest SF.
+            Intended to exercise every category (A1-C1) in ~1 hour. Implies
+            test-query reduction; takes precedence over minimum_mode.
     """
     large_gpu = vram_mb >= (100 * 1024)  # >= 100 GB
-    # minimum mode implies test-query reduction as well.
-    cfg = _build_benchmarks(large_gpu, test_mode or minimum_mode)
+    # toy/minimum modes both imply test-query reduction.
+    cfg = _build_benchmarks(large_gpu, test_mode or minimum_mode or toy_mode)
+    if toy_mode:
+        # Only tpch, one query, the single largest SF. This is deliberately
+        # the most minimal config that still touches every category.
+        tpch = cfg["tpch"]
+        tpch["queries"] = list(tpch["queries"])[:1]          # one query (q1)
+        tpch["scale_factors"] = [tpch["scale_factors"][-1]]  # largest SF only
+        return {"tpch": tpch}
     if minimum_mode:
         # Drop microbench_* entirely.
         for key in list(cfg.keys()):

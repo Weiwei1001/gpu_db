@@ -88,7 +88,9 @@ if ! pkg-config --atleast-version=20230125 absl_any_invocable 2>/dev/null; then
             -DABSL_BUILD_TESTING=OFF \
             -DCMAKE_CXX_STANDARD=17 >/dev/null
         ninja -C "$ABSL_TMP/absl/build" >/dev/null
-        ninja -C "$ABSL_TMP/absl/build" install >/dev/null
+        # Installing to /usr/local needs root on a sudo-user machine (only root
+        # containers can write there without sudo). Use $SUDO like the apt step.
+        $SUDO ninja -C "$ABSL_TMP/absl/build" install >/dev/null
         rm -rf "$ABSL_TMP"
         echo "[build_sirius] abseil installed."
     fi
@@ -108,7 +110,8 @@ if [ ! -f "$SPDLOG_CONFIG" ]; then
         -DCMAKE_INSTALL_PREFIX=/usr/local \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON >/dev/null
     ninja -C "$SPDLOG_TMP/spdlog/build" >/dev/null
-    ninja -C "$SPDLOG_TMP/spdlog/build" install >/dev/null
+    # Needs root to install into /usr/local (see abseil note above).
+    $SUDO ninja -C "$SPDLOG_TMP/spdlog/build" install >/dev/null
     rm -rf "$SPDLOG_TMP"
     echo "[build_sirius] spdlog installed."
 fi

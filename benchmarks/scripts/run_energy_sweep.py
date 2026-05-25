@@ -262,7 +262,8 @@ def config_has_results(cfg_dir: Path, engine: str, benchmarks: list[str]) -> boo
 
 def run_maximus_metrics(benchmarks: list[str], cfg_dir: Path,
                         target_time: float,
-                        storage: str = "gpu") -> int:
+                        storage: str = "gpu",
+                        toy: bool = False) -> int:
     """Run run_maximus_metrics.py as a subprocess. Returns exit code."""
     cmd = [
         sys.executable,
@@ -272,13 +273,15 @@ def run_maximus_metrics(benchmarks: list[str], cfg_dir: Path,
         "--target-time", str(target_time),
         "--storage", storage,
     ]
+    if toy:
+        cmd.append("--toy")  # propagate query/SF reduction to the subprocess
     print(f"  [MAXIMUS] Running: {' '.join(cmd)}")
     result = subprocess.run(cmd, timeout=7200)  # 2 hour timeout
     return result.returncode
 
 
 def run_sirius_metrics(benchmarks: list[str], cfg_dir: Path,
-                       target_time: float) -> int:
+                       target_time: float, toy: bool = False) -> int:
     """Run run_sirius_metrics.py as a subprocess. Returns exit code."""
     cmd = [
         sys.executable,
@@ -287,6 +290,8 @@ def run_sirius_metrics(benchmarks: list[str], cfg_dir: Path,
         "--results-dir", str(cfg_dir),
         "--target-time", str(target_time),
     ]
+    if toy:
+        cmd.append("--toy")  # propagate query/SF reduction to the subprocess
     print(f"  [SIRIUS] Running: {' '.join(cmd)}")
     result = subprocess.run(cmd, timeout=7200)  # 2 hour timeout
     return result.returncode
@@ -578,10 +583,11 @@ def run_sweep(args: argparse.Namespace) -> None:
                 if engine == "maximus":
                     rc = run_maximus_metrics(
                         bench_to_run, cfg_d, args.maximus_target_time,
-                        storage=args.storage)
+                        storage=args.storage, toy=args.toy)
                 else:
                     rc = run_sirius_metrics(
-                        bench_to_run, cfg_d, args.sirius_target_time)
+                        bench_to_run, cfg_d, args.sirius_target_time,
+                        toy=args.toy)
 
                 if rc != 0:
                     print(f"  WARNING: {engine} metrics exited with code {rc}")
@@ -768,6 +774,10 @@ Examples:
         "--minimum", action="store_true",
         help="Minimum experiment: 3 SM clocks × 3 power limits (9 configs "
              "vs the default 25) and SF_min only.")
+    parser.add_argument(
+        "--toy", action="store_true",
+        help="Toy experiment: 2 SM clocks × 2 power limits (4 configs), tpch "
+             "only, 1 query, largest SF, metrics target-time capped at 120s.")
     args = parser.parse_args()
 
     # In minimum mode, thin the sweep grid to 3×3 and keep only 2 SFs per bench.
@@ -779,6 +789,18 @@ Examples:
                           DEFAULT_SM_CLOCKS[len(DEFAULT_SM_CLOCKS)//2],
                           DEFAULT_SM_CLOCKS[-1]]
         print(f"[MINIMUM] power_limits={args.power_limits}, sm_clocks={args.sm_clocks}")
+
+    # Toy mode: 2×2 grid (extremes only), tpch only, 120s metric cap.
+    # The query/SF reduction itself is handled by --toy propagated to the
+    # metrics subprocesses (get_benchmark_config(toy_mode=True)).
+    if args.toy:
+        args.power_limits = [DEFAULT_POWER_LIMITS[0], DEFAULT_POWER_LIMITS[-1]]
+        args.sm_clocks = [DEFAULT_SM_CLOCKS[0], DEFAULT_SM_CLOCKS[-1]]
+        args.benchmarks = ["tpch"]
+        args.maximus_target_time = 120  # metrics sampling window = 2 min
+        args.sirius_target_time = 120
+        print(f"[TOY] power_limits={args.power_limits}, sm_clocks={args.sm_clocks}, "
+              f"benchmarks={args.benchmarks}, target_time=120s")
 
     # Safety: always restore GPU defaults on exit
     try:

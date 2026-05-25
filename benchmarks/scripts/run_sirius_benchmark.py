@@ -203,6 +203,8 @@ def main():
                         help="Test mode: use reduced query lists for quick validation")
     parser.add_argument("--minimum", action="store_true",
                         help="Minimum experiment: SF_min + SF_max, no microbench")
+    parser.add_argument("--toy", action="store_true",
+                        help="Toy experiment: tpch only, 1 query, largest SF (smallest A+B+C smoke)")
     args = parser.parse_args()
 
     sirius_dir = Path(args.sirius_dir)
@@ -217,7 +219,8 @@ def main():
     # Build dynamic benchmark config from hw_detect
     bench_config = get_benchmark_config(_gpu_info["vram_mb"],
                                         test_mode=args.test,
-                                        minimum_mode=args.minimum)
+                                        minimum_mode=args.minimum,
+                                        toy_mode=args.toy)
     BENCHMARKS = {k: v for k, v in bench_config.items() if k in _SIRIUS_BENCHMARKS}
 
     _batch_size = args.batch_size
@@ -233,8 +236,8 @@ def main():
             continue
         cfg = BENCHMARKS[bench_name]
         queries = load_queries(sirius_query_dir(bench_name))
-        # In test mode, filter to only the configured queries
-        if args.test:
+        # In any reduced mode (test/minimum/toy), filter to configured queries.
+        if args.test or args.minimum or args.toy:
             allowed = set(cfg["queries"])
             queries = [(qn, gl) for qn, gl in queries if qn in allowed]
 

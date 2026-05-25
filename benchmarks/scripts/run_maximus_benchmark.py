@@ -118,13 +118,16 @@ def main():
                         help="Quick test with 3 queries per benchmark")
     parser.add_argument("--minimum", action="store_true",
                         help="Minimum experiment: SF_min + SF_max, 3 queries/bench, no microbench")
+    parser.add_argument("--toy", action="store_true",
+                        help="Toy experiment: tpch only, 1 query, largest SF (smallest A+B+C smoke)")
     args = parser.parse_args()
 
     global BENCHMARKS
-    if args.test or args.minimum:
+    if args.test or args.minimum or args.toy:
         BENCHMARKS = get_benchmark_config(gpu_info["vram_mb"],
                                           test_mode=args.test,
-                                          minimum_mode=args.minimum)
+                                          minimum_mode=args.minimum,
+                                          toy_mode=args.toy)
 
     results_dir = Path(args.results_dir) if args.results_dir else MAXIMUS_DIR / "benchmark_results"
     results_dir.mkdir(parents=True, exist_ok=True)

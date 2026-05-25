@@ -89,6 +89,36 @@ check_cmd() {
 
 check_cmd git || { log "FATAL: git is required"; exit 1; }
 check_cmd cmake || CMAKE_NEEDED=true
+
+# nvcc (CUDA toolkit). A fresh machine usually has the NVIDIA *driver* (nvidia-smi)
+# but NOT the CUDA *toolkit* (nvcc). Rather than aborting, install it from the NVIDIA
+# CUDA apt repo. Pick the bin dir up so the rest of the script sees nvcc on PATH.
+if ! command -v nvcc &>/dev/null; then
+    # Maybe it's installed under /usr/local/cuda but not on PATH.
+    for _cudadir in /usr/local/cuda/bin /usr/local/cuda-12.6/bin /usr/local/cuda-12/bin; do
+        if [ -x "$_cudadir/nvcc" ]; then export PATH="$_cudadir:$PATH"; break; fi
+    done
+fi
+if ! command -v nvcc &>/dev/null; then
+    log "  nvcc not found — installing CUDA toolkit 12.6 from NVIDIA apt repo..."
+    if [ -f /etc/os-release ]; then . /etc/os-release; fi
+    # NVIDIA repo path uses the distro id+version with no dot, e.g. ubuntu2204.
+    _CUDA_DISTRO="${ID:-ubuntu}${VERSION_ID//./}"
+    if [ ! -f /usr/share/keyrings/cuda-archive-keyring.gpg ] && \
+       ! apt-cache policy cuda-toolkit-12-6 2>/dev/null | grep -q Candidate; then
+        wget -qO /tmp/cuda-keyring.deb \
+            "https://developer.download.nvidia.com/compute/cuda/repos/${_CUDA_DISTRO}/x86_64/cuda-keyring_1.1-1_all.deb" \
+            && sudo dpkg -i /tmp/cuda-keyring.deb && rm -f /tmp/cuda-keyring.deb
+        sudo apt-get update -qq
+    fi
+    sudo apt-get install -y -qq cuda-toolkit-12-6
+    # Add the freshly-installed toolkit to PATH for this process.
+    for _cudadir in /usr/local/cuda/bin /usr/local/cuda-12.6/bin /usr/local/cuda-12/bin; do
+        if [ -x "$_cudadir/nvcc" ]; then export PATH="$_cudadir:$PATH"; break; fi
+    done
+    command -v nvcc &>/dev/null || { log "FATAL: CUDA toolkit install failed (nvcc still not found)"; exit 1; }
+    log "  CUDA toolkit installed: $(nvcc --version | grep release)"
+fi
 check_cmd nvcc || { log "FATAL: CUDA toolkit required (nvcc not found)"; exit 1; }
 
 if command -v nvidia-smi &>/dev/null; then
@@ -349,6 +379,13 @@ unset _MAXIMUS_PIP_CANDIDATES _cand
 if [ -n "$CONDA_PREFIX" ]; then
     export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
 fi
+
+# CUDA toolkit — nvcc installs to /usr/local/cuda*/bin which is not on PATH by
+# default. Add it so interactive shells / helper scripts that call nvcc work.
+for _cudadir in /usr/local/cuda/bin /usr/local/cuda-12.6/bin /usr/local/cuda-12/bin; do
+    if [ -x "$_cudadir/nvcc" ]; then export PATH="$_cudadir:$PATH"; break; fi
+done
+unset _cudadir
 
 # Maximus
 export MAXIMUS_DIR="$SCRIPT_DIR"

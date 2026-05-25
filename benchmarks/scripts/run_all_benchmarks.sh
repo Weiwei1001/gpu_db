@@ -18,6 +18,8 @@
 #   bash run_all_benchmarks.sh                     # Full run (A + B + C)
 #   bash run_all_benchmarks.sh --test              # Quick smoke test (3 queries per bench)
 #   bash run_all_benchmarks.sh --minimum           # 8-hour budget: SF_min+SF_max, no microbench, 3×3 C sweep
+#   bash run_all_benchmarks.sh --toy               # ~1-hour smoke of A1-C1: tpch only, 1 query, largest SF,
+#                                                  #   metrics target-time=120s, Category C = 2×2 (4 configs)
 #   bash run_all_benchmarks.sh --skip-category-c   # Skip energy sweep (A + B only)
 #
 set -o pipefail
@@ -44,19 +46,25 @@ mkdir -p "$LOG_DIR"
 # ── Parse arguments ────────────────────────────────────────────────────────
 TEST_FLAG=""
 MIN_FLAG=""
+TOY_FLAG=""
 SKIP_CATEGORY_C=0
+# Metrics sampling window (seconds). Toy mode caps it at 120s (2 min) so the
+# whole A+B+C smoke completes in ~1h; full/test/minimum keep the short 5s window.
+METRICS_TT=5
 for arg in "$@"; do
     case "$arg" in
         --test) TEST_FLAG="--test" ;;
         --minimum|--min) MIN_FLAG="--minimum" ;;
+        --toy) TOY_FLAG="--toy"; METRICS_TT=120 ;;
         --skip-category-c|--no-energy-sweep) SKIP_CATEGORY_C=1 ;;
         *) echo "Unknown argument: $arg"; exit 1 ;;
     esac
 done
-EXTRA_FLAGS="$EXTRA_FLAGS $TEST_FLAG $MIN_FLAG"
+EXTRA_FLAGS="$EXTRA_FLAGS $TEST_FLAG $MIN_FLAG $TOY_FLAG"
 
 MODE="FULL"
 [ -n "$EXTRA_FLAGS" ] && MODE="TEST"
+[ -n "$TOY_FLAG" ] && MODE="TOY"
 
 DATA_DIR="$MAXIMUS_DIR/benchmarks/data"
 
@@ -298,14 +306,14 @@ fi
 
 # A3: Maximus metrics (standard + microbench) — reuse A1 timing to skip calibration
 run_step "A3_maximus_metrics" \
-    python3 run_maximus_metrics.py $EXTRA_FLAGS --target-time 5 --results-dir "$RESULTS_DIR" \
+    python3 run_maximus_metrics.py $EXTRA_FLAGS --target-time $METRICS_TT --results-dir "$RESULTS_DIR" \
     --timing-csv "$RESULTS_DIR/maximus_benchmark.csv" \
     $ALL_BENCH
 
 # A4: Sirius metrics (standard SQL only)
 if has_sirius; then
     run_step "A4_sirius_metrics" \
-        python3 run_sirius_metrics.py $EXTRA_FLAGS --target-time 5 --results-dir "$RESULTS_DIR" \
+        python3 run_sirius_metrics.py $EXTRA_FLAGS --target-time $METRICS_TT --results-dir "$RESULTS_DIR" \
         $ALL_BENCH
 else
     echo "  [SKIP] A4: Sirius metrics: binary not found"
@@ -325,7 +333,7 @@ run_step "B1_maximus_cpu_timing" \
 
 # B2: Maximus CPU-data metrics — reuse B1 timing to skip calibration
 run_step "B2_maximus_cpu_metrics" \
-    python3 run_maximus_cpu_data.py $EXTRA_FLAGS --target-time 5 --results-dir "$RESULTS_DIR" \
+    python3 run_maximus_cpu_data.py $EXTRA_FLAGS --target-time $METRICS_TT --results-dir "$RESULTS_DIR" \
     --timing-csv "$RESULTS_DIR/maximus_cpu_data_timing.csv" \
     $CPU_BENCH
 
