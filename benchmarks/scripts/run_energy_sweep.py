@@ -247,22 +247,39 @@ def config_dir(results_dir: Path, power_limit_w: int, sm_clock_mhz: int,
     return results_dir / config_tag(power_limit_w, sm_clock_mhz, mem_clock_mhz)
 
 
+def _bench_map_for(engine: str) -> dict:
+    return MAXIMUS_BENCHMARKS if engine == "maximus" else SIRIUS_BENCHMARKS
+
+
+def missing_bench_sfs(cfg_dir: Path, engine: str,
+                      benchmarks: list[str]) -> list[tuple[str, object]]:
+    """Return the (bench, sf) pairs that have NO summary CSV yet.
+
+    Checks per-SF so adding a single new scale factor (e.g. h2o 8gb after
+    an earlier sweep that only ran 1gb/2gb/4gb) is detected and resumed.
+    """
+    bmap = _bench_map_for(engine)
+    pairs: list[tuple[str, object]] = []
+    for bench in benchmarks:
+        if bench not in bmap:
+            continue
+        for sf in bmap[bench]:
+            pattern = f"{engine}_{bench}_sf{sf}_metrics_summary_*.csv"
+            if cfg_dir.exists() and list(cfg_dir.glob(pattern)):
+                continue
+            pairs.append((bench, sf))
+    return pairs
+
+
 def missing_benchmarks(cfg_dir: Path, engine: str,
                        benchmarks: list[str]) -> list[str]:
-    """Return the subset of requested benchmarks that have NO summary CSV yet."""
-    if not cfg_dir.exists():
-        return list(benchmarks)
-    missing = []
-    for bench in benchmarks:
-        pattern = f"{engine}_{bench}_*_metrics_summary_*.csv"
-        if not list(cfg_dir.glob(pattern)):
-            missing.append(bench)
-    return missing
+    """Benches with at least one missing SF (kept for backward compat / logging)."""
+    return sorted({b for b, _ in missing_bench_sfs(cfg_dir, engine, benchmarks)})
 
 
 def config_has_results(cfg_dir: Path, engine: str, benchmarks: list[str]) -> bool:
-    """True iff every requested benchmark already has a summary CSV in cfg_dir."""
-    return not missing_benchmarks(cfg_dir, engine, benchmarks)
+    """True iff every (bench, sf) pair already has a summary CSV in cfg_dir."""
+    return not missing_bench_sfs(cfg_dir, engine, benchmarks)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -272,7 +289,8 @@ def config_has_results(cfg_dir: Path, engine: str, benchmarks: list[str]) -> boo
 def run_maximus_metrics(benchmarks: list[str], cfg_dir: Path,
                         target_time: float,
                         storage: str = "gpu",
-                        toy: bool = False) -> int:
+                        toy: bool = False,
+                        sf: object = None) -> int:
     """Run run_maximus_metrics.py as a subprocess. Returns exit code."""
     cmd = [
         sys.executable,
@@ -282,6 +300,8 @@ def run_maximus_metrics(benchmarks: list[str], cfg_dir: Path,
         "--target-time", str(target_time),
         "--storage", storage,
     ]
+    if sf is not None:
+        cmd += ["--sf", str(sf)]
     if toy:
         cmd.append("--toy")  # propagate query/SF reduction to the subprocess
     print(f"  [MAXIMUS] Running: {' '.join(cmd)}")
@@ -290,7 +310,8 @@ def run_maximus_metrics(benchmarks: list[str], cfg_dir: Path,
 
 
 def run_sirius_metrics(benchmarks: list[str], cfg_dir: Path,
-                       target_time: float, toy: bool = False) -> int:
+                       target_time: float, toy: bool = False,
+                       sf: object = None) -> int:
     """Run run_sirius_metrics.py as a subprocess. Returns exit code."""
     cmd = [
         sys.executable,
@@ -299,6 +320,8 @@ def run_sirius_metrics(benchmarks: list[str], cfg_dir: Path,
         "--results-dir", str(cfg_dir),
         "--target-time", str(target_time),
     ]
+    if sf is not None:
+        cmd += ["--sf", str(sf)]
     if toy:
         cmd.append("--toy")  # propagate query/SF reduction to the subprocess
     print(f"  [SIRIUS] Running: {' '.join(cmd)}")
@@ -572,42 +595,55 @@ def run_sweep(args: argparse.Namespace) -> None:
 
         # Run metrics for each engine
         for engine in engines:
-            # Determine which benchmarks to run for this engine
-            if engine == "maximus":
-                engine_bench_map = MAXIMUS_BENCHMARKS
-            else:
-                engine_bench_map = SIRIUS_BENCHMARKS
+            engine_bench_map = _bench_map_for(engine)
 
             bench_to_run = [b for b in benchmarks if b in engine_bench_map]
             if not bench_to_run:
                 print(f"  SKIP: No configured benchmarks for {engine}")
                 continue
 
+            # Decide work units (per-(bench,sf) when resuming, per-bench otherwise).
+            # A "work unit" is either ("bench", None) meaning run all configured SFs,
+            # or ("bench", sf) meaning run a single SF.
             if resume:
-                bench_to_run = missing_benchmarks(cfg_d, engine, bench_to_run)
-                if not bench_to_run:
-                    print(f"  SKIP (resume): {engine} all benches done for {tag}")
+                missing_pairs = missing_bench_sfs(cfg_d, engine, bench_to_run)
+                if not missing_pairs:
+                    print(f"  SKIP (resume): {engine} all (bench,sf) done for {tag}")
                     continue
-                print(f"  RESUME: {engine} missing benches for {tag}: "
-                      f"{bench_to_run}")
+                # Group: if every configured SF of a bench is missing, run the
+                # whole bench in one subprocess; otherwise, one subprocess per SF.
+                by_bench: dict[str, list] = {}
+                for b, sf in missing_pairs:
+                    by_bench.setdefault(b, []).append(sf)
+                work_units: list[tuple[str, object]] = []
+                for b, sfs in by_bench.items():
+                    if set(map(str, sfs)) == set(map(str, engine_bench_map[b])):
+                        work_units.append((b, None))
+                    else:
+                        for sf in sfs:
+                            work_units.append((b, sf))
+                print(f"  RESUME: {engine} missing for {tag}: {missing_pairs}")
+            else:
+                work_units = [(b, None) for b in bench_to_run]
 
             print(f"\n  --- Running {engine} metrics for {tag} ---")
-            try:
-                if engine == "maximus":
-                    rc = run_maximus_metrics(
-                        bench_to_run, cfg_d, args.maximus_target_time,
-                        storage=args.storage, toy=args.toy)
-                else:
-                    rc = run_sirius_metrics(
-                        bench_to_run, cfg_d, args.sirius_target_time,
-                        toy=args.toy)
+            for bench, sf in work_units:
+                try:
+                    if engine == "maximus":
+                        rc = run_maximus_metrics(
+                            [bench], cfg_d, args.maximus_target_time,
+                            storage=args.storage, toy=args.toy, sf=sf)
+                    else:
+                        rc = run_sirius_metrics(
+                            [bench], cfg_d, args.sirius_target_time,
+                            toy=args.toy, sf=sf)
 
-                if rc != 0:
-                    print(f"  WARNING: {engine} metrics exited with code {rc}")
-            except subprocess.TimeoutExpired:
-                print(f"  ERROR: {engine} metrics timed out for {tag}")
-            except Exception as e:
-                print(f"  ERROR: {engine} metrics failed for {tag}: {e}")
+                    if rc != 0:
+                        print(f"  WARNING: {engine} {bench} sf={sf} exited with code {rc}")
+                except subprocess.TimeoutExpired:
+                    print(f"  ERROR: {engine} {bench} sf={sf} timed out for {tag}")
+                except Exception as e:
+                    print(f"  ERROR: {engine} {bench} sf={sf} failed for {tag}: {e}")
 
         completed += 1
 

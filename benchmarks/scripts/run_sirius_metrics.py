@@ -212,6 +212,8 @@ def run_sirius_query(duckdb_bin, db_path, qname, gpu_lines, n_reps, buffer_init,
 def main():
     parser = argparse.ArgumentParser(description="Sirius GPU steady-state metrics")
     parser.add_argument("benchmarks", nargs="*", default=["tpch", "h2o", "clickbench"])
+    parser.add_argument("--sf", type=str, default=None,
+                        help="Specific scale factor (default: all configured SFs)")
     parser.add_argument("--sirius-dir", type=str, default=str(DEFAULT_SIRIUS_DIR))
     parser.add_argument("--results-dir", type=str, default=str(DEFAULT_RESULTS_DIR))
     parser.add_argument("--target-time", type=float, default=TARGET_TIME_S)
@@ -276,7 +278,13 @@ def main():
             allowed = set(cfg["queries"])
             queries = [(qn, gl) for qn, gl in queries if qn in allowed]
 
-        for sf in cfg["scale_factors"]:
+        sfs = cfg["scale_factors"]
+        if args.sf is not None:
+            sfs = [s for s in sfs if str(s) == str(args.sf)]
+            if not sfs:
+                print(f"SF={args.sf} not configured for {bench_name}")
+                continue
+        for sf in sfs:
             db_path = sirius_db_path(bench_name, sf)
             if not db_path.exists():
                 if not ensure_sirius_db(bench_name, sf):
