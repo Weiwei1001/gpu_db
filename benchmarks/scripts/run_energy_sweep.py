@@ -71,10 +71,12 @@ MAXIMUS_BENCHMARKS = {
     "case_bench": [1, 5, 10, 20],
 }
 SIRIUS_BENCHMARKS = {
+    # NOTE: sirius does not implement case_bench (the metrics script
+    # explicitly rejects it as "Unknown benchmark"), so it's omitted here
+    # to avoid wasted subprocess launches during the sweep.
     "tpch": [1, 5, 10, 20],
     "h2o": ["1gb", "2gb", "4gb", "8gb"],
     "clickbench": [1, 5, 10, 20],
-    "case_bench": [1, 5, 10, 20],
 }
 
 # Unified summary CSV columns
