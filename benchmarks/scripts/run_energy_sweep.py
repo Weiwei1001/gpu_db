@@ -65,16 +65,16 @@ _N_POWER_LIMITS = 5
 _N_SM_CLOCKS = 5
 
 MAXIMUS_BENCHMARKS = {
-    "tpch": [1, 2],
-    "h2o": ["1gb", "2gb"],
-    "clickbench": [5],
-    "case_bench": [1],   # tiny queries; one SF is plenty for the energy sweep
+    "tpch": [1, 5, 10, 20],
+    "h2o": ["1gb", "2gb", "4gb", "8gb"],
+    "clickbench": [1, 5, 10, 20],
+    "case_bench": [1, 5, 10, 20],
 }
 SIRIUS_BENCHMARKS = {
-    "tpch": [1, 2],
-    "h2o": ["1gb", "2gb"],
-    "clickbench": [5],
-    "case_bench": [1],
+    "tpch": [1, 5, 10, 20],
+    "h2o": ["1gb", "2gb", "4gb", "8gb"],
+    "clickbench": [1, 5, 10, 20],
+    "case_bench": [1, 5, 10, 20],
 }
 
 # Unified summary CSV columns
