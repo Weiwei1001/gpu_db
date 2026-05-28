@@ -247,13 +247,22 @@ def config_dir(results_dir: Path, power_limit_w: int, sm_clock_mhz: int,
     return results_dir / config_tag(power_limit_w, sm_clock_mhz, mem_clock_mhz)
 
 
-def config_has_results(cfg_dir: Path, engine: str, benchmarks: list[str]) -> bool:
-    """Check if a config directory already has summary CSVs for all requested benchmarks."""
+def missing_benchmarks(cfg_dir: Path, engine: str,
+                       benchmarks: list[str]) -> list[str]:
+    """Return the subset of requested benchmarks that have NO summary CSV yet."""
     if not cfg_dir.exists():
-        return False
-    pattern = f"{engine}_*_metrics_summary_*.csv"
-    existing = list(cfg_dir.glob(pattern))
-    return len(existing) > 0
+        return list(benchmarks)
+    missing = []
+    for bench in benchmarks:
+        pattern = f"{engine}_{bench}_*_metrics_summary_*.csv"
+        if not list(cfg_dir.glob(pattern)):
+            missing.append(bench)
+    return missing
+
+
+def config_has_results(cfg_dir: Path, engine: str, benchmarks: list[str]) -> bool:
+    """True iff every requested benchmark already has a summary CSV in cfg_dir."""
+    return not missing_benchmarks(cfg_dir, engine, benchmarks)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -563,10 +572,6 @@ def run_sweep(args: argparse.Namespace) -> None:
 
         # Run metrics for each engine
         for engine in engines:
-            if resume and config_has_results(cfg_d, engine, benchmarks):
-                print(f"  SKIP (resume): {engine} already has results for {tag}")
-                continue
-
             # Determine which benchmarks to run for this engine
             if engine == "maximus":
                 engine_bench_map = MAXIMUS_BENCHMARKS
@@ -577,6 +582,14 @@ def run_sweep(args: argparse.Namespace) -> None:
             if not bench_to_run:
                 print(f"  SKIP: No configured benchmarks for {engine}")
                 continue
+
+            if resume:
+                bench_to_run = missing_benchmarks(cfg_d, engine, bench_to_run)
+                if not bench_to_run:
+                    print(f"  SKIP (resume): {engine} all benches done for {tag}")
+                    continue
+                print(f"  RESUME: {engine} missing benches for {tag}: "
+                      f"{bench_to_run}")
 
             print(f"\n  --- Running {engine} metrics for {tag} ---")
             try:
