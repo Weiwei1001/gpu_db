@@ -22,6 +22,22 @@
 #                                                  #   metrics target-time=120s, Category C = 2×2 (4 configs)
 #   bash run_all_benchmarks.sh --skip-category-c   # Skip energy sweep (A + B only)
 #
+#   bash run_all_benchmarks.sh --fix-A100          # One-click full repair of the A100 results
+#   bash run_all_benchmarks.sh --fix-H100          # One-click full repair of the H100 results
+#     The two --fix-* flags run a complete, self-healing repair in one shot:
+#       1. validate H2O CSV row counts and regenerate any short/missing dataset
+#          (fixes the A100 csv-4gb that made SF4 cheaper than SF2);
+#       2. re-run Category A timing (Maximus + Sirius) — refreshes stale/failed
+#          rows such as the A100 TPC-H SF20 10/22 from a pre-managed-memory run;
+#       3. re-run Category A metrics (patched Sirius timing fixes energy=0 on
+#          sub-ms ClickBench/microbench);
+#       4. purge degenerate (smoke / zero-timing) and cross-SF-anomalous sweep
+#          summaries; 5. resume the canonical 5x5 (PL x SM-clock) sweep grid for
+#          the missing points; 6. re-aggregate energy_summary.csv; 7. coverage.
+#     Run each on its matching machine (the grid is pinned per GPU). Category B
+#     is left untouched (it was already complete); for a from-scratch run use the
+#     no-flag invocation above.
+#
 set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -48,6 +64,7 @@ TEST_FLAG=""
 MIN_FLAG=""
 TOY_FLAG=""
 SKIP_CATEGORY_C=0
+FIX_GPU=""
 # Metrics sampling window (seconds). Toy mode caps it at 120s (2 min) so the
 # whole A+B+C smoke completes in ~1h; full/test/minimum keep the short 5s window.
 METRICS_TT=5
@@ -57,6 +74,8 @@ for arg in "$@"; do
         --minimum|--min) MIN_FLAG="--minimum" ;;
         --toy) TOY_FLAG="--toy"; METRICS_TT=120 ;;
         --skip-category-c|--no-energy-sweep) SKIP_CATEGORY_C=1 ;;
+        --fix-A100|--fix-a100) FIX_GPU="A100" ;;
+        --fix-H100|--fix-h100) FIX_GPU="H100" ;;
         *) echo "Unknown argument: $arg"; exit 1 ;;
     esac
 done
@@ -194,7 +213,14 @@ if has_sirius; then
         DB="$MAXIMUS_DIR/tests/tpch_duckdb/tpch_sf${sf}.duckdb"
         CSV_DIR="$MAXIMUS_DIR/tests/tpch/csv-${sf}"
         if [ -f "$DB" ]; then
-            continue
+            # Freshness guard: rebuild if DB size is >10x off the CSVs or
+            # the main `lineitem` table is missing/empty.
+            if python3 "$SCRIPT_DIR/check_duckdb.py" --db "$DB" \
+                 --ref "$CSV_DIR"/*.csv --table lineitem; then
+                continue
+            fi
+            echo "  [DATAGEN] tpch_sf${sf}.duckdb failed freshness check — rebuilding"
+            rm -f "$DB"
         fi
         if [ -d "$CSV_DIR" ]; then
             echo "  [DATAGEN] Creating tpch_sf${sf}.duckdb..."
@@ -214,7 +240,14 @@ conn.close()
         DB="$MAXIMUS_DIR/tests/h2o_duckdb/h2o_${sf}.duckdb"
         CSV_DIR="$MAXIMUS_DIR/tests/h2o/csv-${sf}"
         if [ -f "$DB" ]; then
-            continue
+            # Freshness guard: rebuild if DB size is >10x off the CSV or the
+            # `groupby` table is missing/empty.
+            if python3 "$SCRIPT_DIR/check_duckdb.py" --db "$DB" \
+                 --ref "$CSV_DIR/groupby.csv" --table groupby; then
+                continue
+            fi
+            echo "  [DATAGEN] h2o_${sf}.duckdb failed freshness check — rebuilding"
+            rm -f "$DB"
         fi
         if [ -d "$CSV_DIR" ]; then
             echo "  [DATAGEN] Creating h2o_${sf}.duckdb..."
@@ -228,22 +261,37 @@ conn.close()
     done
 
     # Generate DuckDB databases from CSV (ClickBench)
+    #
+    # Freshness guard: a stale / incomplete / empty clickbench DB that already
+    # exists would otherwise be reused silently (the regression where Sirius
+    # clickbench queries returned in ~5ms with the GPU idle -> 0 time/energy).
+    # check_duckdb.py deletes-and-rebuilds when the DB size is >10x off from
+    # t.csv OR when table `t` is missing/empty. NOTE: the table is named `t`
+    # (NOT `hits`) to match the Sirius SQL, which queries `FROM t`.
     mkdir -p "$MAXIMUS_DIR/tests/click_duckdb"
     for sf in $CB_SFS; do
         DB="$MAXIMUS_DIR/tests/click_duckdb/clickbench_${sf}.duckdb"
         CSV_DIR="$MAXIMUS_DIR/tests/clickbench/csv-${sf}"
+        CSV="$CSV_DIR/t.csv"
+        [ -f "$CSV" ] || continue
         if [ -f "$DB" ]; then
-            continue
+            if python3 "$SCRIPT_DIR/check_duckdb.py" --db "$DB" --ref "$CSV" --table t; then
+                continue   # existing DB is valid (size + table t non-empty)
+            else
+                echo "  [DATAGEN] clickbench_${sf}.duckdb failed freshness check — rebuilding"
+                rm -f "$DB"
+            fi
         fi
-        if [ -d "$CSV_DIR" ] && [ -f "$CSV_DIR/t.csv" ]; then
-            echo "  [DATAGEN] Creating clickbench_${sf}.duckdb..."
-            python3 -c "
+        echo "  [DATAGEN] Creating clickbench_${sf}.duckdb..."
+        python3 -c "
 import duckdb
 conn = duckdb.connect('$DB')
-conn.execute(\"CREATE TABLE hits AS SELECT * FROM read_csv_auto('${CSV_DIR}/t.csv')\")
+conn.execute(\"CREATE TABLE t AS SELECT * FROM read_csv_auto('${CSV}')\")
 conn.close()
 " 2>&1 | tail -3
-        fi
+        # Verify the freshly-built DB actually populated table t.
+        python3 "$SCRIPT_DIR/check_duckdb.py" --db "$DB" --ref "$CSV" --table t \
+            || echo "  [WARN] clickbench_${sf}.duckdb still invalid after rebuild — check t.csv"
     done
 
     echo "  [DATAGEN] Sirius data done."
@@ -256,6 +304,152 @@ GPU_VRAM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 
     $(python3 -c "from hw_detect import detect_gpu; print(detect_gpu()['index'])") 2>/dev/null | head -1)
 echo "  GPU VRAM: ${GPU_VRAM_MB:-unknown} MiB"
 echo "  Buffer sizing and benchmark configs are auto-adjusted by hw_detect.py"
+
+# ══════════════════════════════════════════════════════════════════════════
+#  --fix-A100 / --fix-H100 : Category-C-only repair
+#
+#  Re-runs ONLY the energy sweep to fill the gaps in a previous run:
+#    * A100: the original sweep predates clickbench/case_bench and full SF, so
+#            those (plus h2o 8gb) are simply absent — a plain --resume adds them.
+#    * H100: parts of the sweep ran in --test (smoke) mode, leaving 3-query
+#            summaries that --resume mistakes for "done"; we purge those first.
+#  Each GPU's canonical 5x5 grid is pinned so aggregation matches the existing
+#  summary and no new off-grid config dirs are created. Data is already ensured
+#  by Step 0a/0c above; the metrics subprocesses also auto-generate any missing
+#  CSV via ensure_maximus_csv (clickbench needs the ~14GB parquet + internet).
+# ══════════════════════════════════════════════════════════════════════════
+run_category_c_fix() {
+    local gpu="$1"
+    local PL CLK
+    case "$gpu" in
+        A100) PL="150,188,225,262,300"; CLK="210,510,810,1110,1410" ;;
+        H100) PL="200,228,255,282,310"; CLK="345,705,1065,1425,1785" ;;
+        *) echo "ERROR: unknown --fix target '$gpu'"; return 2 ;;
+    esac
+    local SWEEP_DIR="$RESULTS_DIR/energy_sweep"
+    # Benchmark sets, kept in sync with the main pipeline (ALL_BENCH at the
+    # bottom of this file). Defined locally because the fix function runs and
+    # exits BEFORE those globals are set. The timing/metrics scripts rewrite
+    # their whole CSV from only the benchmarks passed, so we must pass the full
+    # set here or we would drop rows for the benchmarks we omit.
+    local ALL_BENCH="tpch h2o clickbench case_bench microbench_tpch microbench_h2o microbench_clickbench"
+
+    echo ""
+    echo "========================================================================"
+    echo "  FULL FIX — $gpu  (one-click: data -> Cat A -> Cat C -> summary)"
+    echo "  Grid:      PL=[$PL] W  x  SM=[$CLK] MHz  (5x5 = 25 configs)"
+    echo "  Sweep dir: $SWEEP_DIR"
+    echo "  Started:   $(date)"
+    echo "========================================================================"
+
+    # Step 1: validate H2O CSV datasets by ROW COUNT and rebuild any that are
+    #         short/missing. Step 0a only checks the dir EXISTS, so a dataset
+    #         left short by an interrupted/old generation (observed: A100
+    #         csv-4gb) is never rebuilt and makes a larger SF measure CHEAPER
+    #         than a smaller one. Rebuilding the data is the real fix; purge
+    #         (step 4) then drops the stale summaries so resume re-measures.
+    echo ""
+    echo "---- Fix step 1/7: validate + regenerate short H2O datasets ----"
+    python3 "$SCRIPT_DIR/validate_h2o_data.py" "$MAXIMUS_DIR/tests/h2o" \
+        --scales 1gb 2gb 4gb 8gb --regenerate \
+        2>&1 | tee "$LOG_DIR/fix_${gpu}_h2o_validate.log" || true
+
+    # Step 2: re-run Category A timing (data on GPU, -s gpu). This refreshes any
+    #         stale/failed rows — e.g. the A100 TPC-H SF20 timing that shows
+    #         10/22 FAIL from a pre-managed-memory binary but completes 22/22 on
+    #         the current build. The CSV is rewritten wholesale, so we pass the
+    #         full ALL_BENCH set.
+    echo ""
+    echo "---- Fix step 2/7: Category A timing (Maximus + Sirius) ----"
+    python3 "$SCRIPT_DIR/run_maximus_benchmark.py" $EXTRA_FLAGS --n-reps 3 \
+        --results-dir "$RESULTS_DIR" $ALL_BENCH \
+        2>&1 | tee "$LOG_DIR/fix_${gpu}_A1_timing.log" || true
+    if has_sirius; then
+        python3 "$SCRIPT_DIR/run_sirius_benchmark.py" $EXTRA_FLAGS \
+            --results-dir "$RESULTS_DIR" $ALL_BENCH \
+            2>&1 | tee "$LOG_DIR/fix_${gpu}_A2_timing.log" || true
+    fi
+
+    # Step 3: re-run Category A metrics (power/energy). Maximus reuses the fresh
+    #         A1 timing; Sirius uses the patched wall-clock fallback so sub-ms
+    #         ClickBench/microbench queries no longer record energy=0.
+    echo ""
+    echo "---- Fix step 3/7: Category A metrics (Maximus + Sirius) ----"
+    python3 "$SCRIPT_DIR/run_maximus_metrics.py" $EXTRA_FLAGS --target-time $METRICS_TT \
+        --results-dir "$RESULTS_DIR" --timing-csv "$RESULTS_DIR/maximus_benchmark.csv" \
+        $ALL_BENCH \
+        2>&1 | tee "$LOG_DIR/fix_${gpu}_A3_metrics.log" || true
+    if has_sirius; then
+        python3 "$SCRIPT_DIR/run_sirius_metrics.py" $EXTRA_FLAGS --target-time $METRICS_TT \
+            --results-dir "$RESULTS_DIR" $ALL_BENCH \
+            2>&1 | tee "$LOG_DIR/fix_${gpu}_A4_metrics.log" || true
+    fi
+
+    # Step 4: purge degenerate (smoke / zero-timing) and cross-SF-anomalous
+    #         summaries so --resume regenerates them at full query count.
+    #         No-op on a clean A100 dir.
+    echo ""
+    echo "---- Fix step 4/7: purge degenerate / anomalous summaries ----"
+    python3 "$SCRIPT_DIR/purge_degenerate_sweep.py" "$SWEEP_DIR" \
+        2>&1 | tee "$LOG_DIR/fix_${gpu}_purge.log"
+
+    # Step 5: resume the sweep over the canonical grid, all 4 benchmarks, both
+    #         engines. --resume only runs (bench, sf, config) points still missing.
+    echo ""
+    echo "---- Fix step 5/7: resume energy sweep (fills missing points) ----"
+    python3 "$SCRIPT_DIR/run_energy_sweep.py" \
+        --power-limits "$PL" --sm-clocks "$CLK" \
+        --engines maximus sirius \
+        --benchmarks tpch h2o clickbench case_bench \
+        --results-dir "$SWEEP_DIR" \
+        --resume \
+        2>&1 | tee "$LOG_DIR/fix_${gpu}_sweep.log"
+    local rc=${PIPESTATUS[0]}
+
+    # Step 6: re-aggregate the unified energy summary from the refreshed
+    #         Category A metrics so energy_summary.csv reflects the re-runs.
+    echo ""
+    echo "---- Fix step 6/7: re-aggregate energy_summary.csv ----"
+    python3 "$SCRIPT_DIR/compute_energy_summary.py" --latest \
+        --results-dir "$RESULTS_DIR" --output "$RESULTS_DIR/energy_summary.csv" \
+        2>&1 | tee "$LOG_DIR/fix_${gpu}_energy_summary.log" || true
+
+    # Step 7: report coverage of the refreshed sweep so the run can be verified
+    #         at a glance (run_energy_sweep.py already re-aggregated the summary).
+    echo ""
+    echo "---- Fix step 7/7: coverage report ----"
+    python3 - "$SWEEP_DIR/energy_sweep_summary.csv" <<'PYCOV' 2>&1 | tee "$LOG_DIR/fix_${gpu}_coverage.log" || true
+import csv, sys, os
+from collections import defaultdict
+path = sys.argv[1]
+if not os.path.exists(path):
+    print(f"  [coverage] summary not found: {path}"); sys.exit(0)
+q = defaultdict(set); st = defaultdict(lambda: defaultdict(int))
+for r in csv.DictReader(open(path)):
+    k = (r["engine"], r["benchmark"], str(r["sf"]))
+    q[k].add(r["query"]); st[k][r.get("status", "OK") or "OK"] += 1
+print(f"  {'engine':<8}{'benchmark':<12}{'sf':<6}{'queries':<9}status")
+for k in sorted(q):
+    eng, b, sf = k
+    stat = ", ".join(f"{s}={n}" for s, n in sorted(st[k].items()))
+    print(f"  {eng:<8}{b:<12}{sf:<6}{len(q[k]):<9}{stat}")
+PYCOV
+
+    echo ""
+    echo "========================================================================"
+    echo "  FULL FIX ($gpu) COMPLETE (sweep rc=$rc)"
+    echo "  Sweep:   $SWEEP_DIR/energy_sweep_summary.csv"
+    echo "  Summary: $RESULTS_DIR/energy_summary.csv"
+    echo "  Finished: $(date)"
+    echo "========================================================================"
+    return "$rc"
+}
+
+if [ -n "$FIX_GPU" ]; then
+    cd "$SCRIPT_DIR"
+    run_category_c_fix "$FIX_GPU"
+    exit $?
+fi
 
 # Benchmarks used per category.
 #   A (GPU-data): full set — standard SQL + microbench + case_bench.

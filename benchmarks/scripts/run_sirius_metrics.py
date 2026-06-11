@@ -185,6 +185,27 @@ def sample_gpu_metrics(stop_event, samples, interval=0.05):
         stop_event.wait(interval)
 
 
+# Cache of buffer-init-only wall time per DuckDB database. DuckDB's .timer has
+# only millisecond resolution, so sub-millisecond queries (all of ClickBench,
+# the fastest microbench queries) report "Run Time: 0.000" -> min_s=0 ->
+# energy=0. To recover a real per-query time we measure the wall clock of a
+# pass and subtract this buffer-init overhead, then divide by the rep count
+# (the same wall-clock approach Maximus uses). buffer_init depends only on the
+# database (VRAM pool), not the query, so we measure it once per db.
+_BUFFER_INIT_WALL: dict[str, float] = {}
+
+
+def buffer_init_wall(duckdb_bin, db_path, buffer_init, timeout) -> float:
+    """Wall-clock time of process-startup + gpu_buffer_init (no query reps), cached per db."""
+    key = str(db_path)
+    if key not in _BUFFER_INIT_WALL:
+        # n_reps=0 -> build_metrics_sql emits buffer_init + markers, no query.
+        _, elapsed, rc = run_sirius_query(
+            duckdb_bin, db_path, "buffer_init", [], 0, buffer_init, timeout)
+        _BUFFER_INIT_WALL[key] = elapsed if rc == 0 and elapsed > 0 else 0.0
+    return _BUFFER_INIT_WALL[key]
+
+
 def run_sirius_query(duckdb_bin, db_path, qname, gpu_lines, n_reps, buffer_init, timeout):
     """Run a single query N times in one DuckDB process, return (stdout, elapsed, rc)."""
     sql = build_metrics_sql(qname, gpu_lines, n_reps, buffer_init)
@@ -383,9 +404,15 @@ def main():
                 # nvidia-smi readings even when per-query time is very short.
                 all_times = []
                 total_elapsed = 0.0
+                total_query_wall = 0.0   # wall clock of query reps only (excl. buffer_init)
                 n_passes = 0
                 status = "OK"
                 per_pass_timeout = max(QUERY_TIMEOUT_S, target_time_s * 3)
+
+                # One-time buffer-init wall measurement (cached per db) so we can
+                # derive a wall-clock per-query time for sub-ms queries.
+                t_init_wall = buffer_init_wall(
+                    duckdb_bin, db_path, buffer_init, per_pass_timeout)
 
                 while total_elapsed < target_time_s:
                     stdout, pass_elapsed, rc = run_sirius_query(
@@ -411,6 +438,8 @@ def main():
                         all_times.extend(pass_times)
 
                     total_elapsed += pass_elapsed
+                    # Query-only wall = pass wall minus the per-process buffer_init overhead.
+                    total_query_wall += max(0.0, pass_elapsed - t_init_wall)
                     n_passes += 1
 
                 stop_event.set()
@@ -485,13 +514,26 @@ def main():
 
                 min_s = min(times) if times else 0
                 avg_s = sum(times) / len(times) if times else 0
+                # Wall-clock per-query time (sub-ms resolution), used when the
+                # DuckDB .timer (1ms resolution) rounds the query to 0.000 — this
+                # is what made all of ClickBench and the fastest microbench
+                # queries report 0 time / 0 energy on both A100 and H100.
+                total_reps = n_reps * n_passes
+                wall_per_query_s = (total_query_wall / total_reps) if total_reps > 0 else 0.0
+                if min_s <= 0 and wall_per_query_s > 0:
+                    min_s = wall_per_query_s
+                    avg_s = wall_per_query_s
+                    timing_source = "wallclock"
+                else:
+                    timing_source = "duckdb_timer"
                 gpu_energy_j = avg_power * min_s if min_s > 0 else 0
                 cpu_energy_j = avg_cpu_pkg_w * min_s if min_s > 0 else 0
 
                 summaries.append({
                     "run_id": run_id, "benchmark": bench_name,
                     "sf": sf, "query": qname, "n_reps": total_n_reps,
-                    "min_s": f"{min_s:.4f}", "avg_s": f"{avg_s:.4f}",
+                    "min_s": f"{min_s:.6f}", "avg_s": f"{avg_s:.6f}",
+                    "timing_source": timing_source,
                     "elapsed_s": f"{elapsed:.2f}",
                     "num_samples": len(samples),
                     "num_steady_samples": len(steady),
@@ -527,12 +569,12 @@ def main():
             with open(summary_file, "w", newline="") as f:
                 w = csv.DictWriter(f, fieldnames=[
                     "run_id", "benchmark", "sf", "query", "n_reps",
-                    "min_s", "avg_s", "elapsed_s",
+                    "min_s", "avg_s", "timing_source", "elapsed_s",
                     "num_samples", "num_steady_samples",
                     "avg_power_w", "max_power_w", "max_mem_mb",
                     "avg_gpu_util", "max_gpu_util", "gpu_energy_j",
                     "avg_cpu_pkg_w", "avg_cpu_dram_w", "cpu_energy_j", "status",
-                ])
+                ], extrasaction="ignore")
                 w.writeheader()
                 w.writerows(summaries)
 
