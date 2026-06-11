@@ -22,14 +22,21 @@
 #                                                  #   metrics target-time=120s, Category C = 2×2 (4 configs)
 #   bash run_all_benchmarks.sh --skip-category-c   # Skip energy sweep (A + B only)
 #
-#   bash run_all_benchmarks.sh --fix-A100          # Cat-C only: complete the A100 energy sweep
-#   bash run_all_benchmarks.sh --fix-H100          # Cat-C only: complete the H100 energy sweep
-#     The two --fix-* flags re-run ONLY Category C to fill the gaps left by the
-#     original sweeps (clickbench / case_bench / h2o-8gb on A100; smoke-mode
-#     --test runs on H100). They purge degenerate (smoke / zero-timing) summary
-#     files, then `run_energy_sweep.py --resume` over that GPU's canonical
-#     5x5 (PL x SM-clock) grid so only the missing (bench, sf, config) points run.
-#     Run each on its matching machine. A/B categories are left untouched.
+#   bash run_all_benchmarks.sh --fix-A100          # One-click full repair of the A100 results
+#   bash run_all_benchmarks.sh --fix-H100          # One-click full repair of the H100 results
+#     The two --fix-* flags run a complete, self-healing repair in one shot:
+#       1. validate H2O CSV row counts and regenerate any short/missing dataset
+#          (fixes the A100 csv-4gb that made SF4 cheaper than SF2);
+#       2. re-run Category A timing (Maximus + Sirius) — refreshes stale/failed
+#          rows such as the A100 TPC-H SF20 10/22 from a pre-managed-memory run;
+#       3. re-run Category A metrics (patched Sirius timing fixes energy=0 on
+#          sub-ms ClickBench/microbench);
+#       4. purge degenerate (smoke / zero-timing) and cross-SF-anomalous sweep
+#          summaries; 5. resume the canonical 5x5 (PL x SM-clock) sweep grid for
+#          the missing points; 6. re-aggregate energy_summary.csv; 7. coverage.
+#     Run each on its matching machine (the grid is pinned per GPU). Category B
+#     is left untouched (it was already complete); for a from-scratch run use the
+#     no-flag invocation above.
 #
 set -o pipefail
 
@@ -320,10 +327,16 @@ run_category_c_fix() {
         *) echo "ERROR: unknown --fix target '$gpu'"; return 2 ;;
     esac
     local SWEEP_DIR="$RESULTS_DIR/energy_sweep"
+    # Benchmark sets, kept in sync with the main pipeline (ALL_BENCH at the
+    # bottom of this file). Defined locally because the fix function runs and
+    # exits BEFORE those globals are set. The timing/metrics scripts rewrite
+    # their whole CSV from only the benchmarks passed, so we must pass the full
+    # set here or we would drop rows for the benchmarks we omit.
+    local ALL_BENCH="tpch h2o clickbench case_bench microbench_tpch microbench_h2o microbench_clickbench"
 
     echo ""
     echo "========================================================================"
-    echo "  CATEGORY C FIX — $gpu"
+    echo "  FULL FIX — $gpu  (one-click: data -> Cat A -> Cat C -> summary)"
     echo "  Grid:      PL=[$PL] W  x  SM=[$CLK] MHz  (5x5 = 25 configs)"
     echo "  Sweep dir: $SWEEP_DIR"
     echo "  Started:   $(date)"
@@ -334,25 +347,56 @@ run_category_c_fix() {
     #         left short by an interrupted/old generation (observed: A100
     #         csv-4gb) is never rebuilt and makes a larger SF measure CHEAPER
     #         than a smaller one. Rebuilding the data is the real fix; purge
-    #         (step 2) then drops the stale summaries so resume re-measures.
+    #         (step 4) then drops the stale summaries so resume re-measures.
     echo ""
-    echo "---- Fix step 1/4: validate + regenerate short H2O datasets ----"
+    echo "---- Fix step 1/7: validate + regenerate short H2O datasets ----"
     python3 "$SCRIPT_DIR/validate_h2o_data.py" "$MAXIMUS_DIR/tests/h2o" \
         --scales 1gb 2gb 4gb 8gb --regenerate \
         2>&1 | tee "$LOG_DIR/fix_${gpu}_h2o_validate.log" || true
 
-    # Step 2: purge degenerate (smoke / zero-timing) and cross-SF-anomalous
+    # Step 2: re-run Category A timing (data on GPU, -s gpu). This refreshes any
+    #         stale/failed rows — e.g. the A100 TPC-H SF20 timing that shows
+    #         10/22 FAIL from a pre-managed-memory binary but completes 22/22 on
+    #         the current build. The CSV is rewritten wholesale, so we pass the
+    #         full ALL_BENCH set.
+    echo ""
+    echo "---- Fix step 2/7: Category A timing (Maximus + Sirius) ----"
+    python3 "$SCRIPT_DIR/run_maximus_benchmark.py" $EXTRA_FLAGS --n-reps 3 \
+        --results-dir "$RESULTS_DIR" $ALL_BENCH \
+        2>&1 | tee "$LOG_DIR/fix_${gpu}_A1_timing.log" || true
+    if has_sirius; then
+        python3 "$SCRIPT_DIR/run_sirius_benchmark.py" $EXTRA_FLAGS \
+            --results-dir "$RESULTS_DIR" $ALL_BENCH \
+            2>&1 | tee "$LOG_DIR/fix_${gpu}_A2_timing.log" || true
+    fi
+
+    # Step 3: re-run Category A metrics (power/energy). Maximus reuses the fresh
+    #         A1 timing; Sirius uses the patched wall-clock fallback so sub-ms
+    #         ClickBench/microbench queries no longer record energy=0.
+    echo ""
+    echo "---- Fix step 3/7: Category A metrics (Maximus + Sirius) ----"
+    python3 "$SCRIPT_DIR/run_maximus_metrics.py" $EXTRA_FLAGS --target-time $METRICS_TT \
+        --results-dir "$RESULTS_DIR" --timing-csv "$RESULTS_DIR/maximus_benchmark.csv" \
+        $ALL_BENCH \
+        2>&1 | tee "$LOG_DIR/fix_${gpu}_A3_metrics.log" || true
+    if has_sirius; then
+        python3 "$SCRIPT_DIR/run_sirius_metrics.py" $EXTRA_FLAGS --target-time $METRICS_TT \
+            --results-dir "$RESULTS_DIR" $ALL_BENCH \
+            2>&1 | tee "$LOG_DIR/fix_${gpu}_A4_metrics.log" || true
+    fi
+
+    # Step 4: purge degenerate (smoke / zero-timing) and cross-SF-anomalous
     #         summaries so --resume regenerates them at full query count.
     #         No-op on a clean A100 dir.
     echo ""
-    echo "---- Fix step 2/4: purge degenerate / anomalous summaries ----"
+    echo "---- Fix step 4/7: purge degenerate / anomalous summaries ----"
     python3 "$SCRIPT_DIR/purge_degenerate_sweep.py" "$SWEEP_DIR" \
         2>&1 | tee "$LOG_DIR/fix_${gpu}_purge.log"
 
-    # Step 3: resume the sweep over the canonical grid, all 4 benchmarks, both
+    # Step 5: resume the sweep over the canonical grid, all 4 benchmarks, both
     #         engines. --resume only runs (bench, sf, config) points still missing.
     echo ""
-    echo "---- Fix step 3/4: resume energy sweep (fills missing points) ----"
+    echo "---- Fix step 5/7: resume energy sweep (fills missing points) ----"
     python3 "$SCRIPT_DIR/run_energy_sweep.py" \
         --power-limits "$PL" --sm-clocks "$CLK" \
         --engines maximus sirius \
@@ -362,10 +406,18 @@ run_category_c_fix() {
         2>&1 | tee "$LOG_DIR/fix_${gpu}_sweep.log"
     local rc=${PIPESTATUS[0]}
 
-    # Step 4: report coverage of the refreshed sweep so the run can be verified
+    # Step 6: re-aggregate the unified energy summary from the refreshed
+    #         Category A metrics so energy_summary.csv reflects the re-runs.
+    echo ""
+    echo "---- Fix step 6/7: re-aggregate energy_summary.csv ----"
+    python3 "$SCRIPT_DIR/compute_energy_summary.py" --latest \
+        --results-dir "$RESULTS_DIR" --output "$RESULTS_DIR/energy_summary.csv" \
+        2>&1 | tee "$LOG_DIR/fix_${gpu}_energy_summary.log" || true
+
+    # Step 7: report coverage of the refreshed sweep so the run can be verified
     #         at a glance (run_energy_sweep.py already re-aggregated the summary).
     echo ""
-    echo "---- Fix step 4/4: coverage report ----"
+    echo "---- Fix step 7/7: coverage report ----"
     python3 - "$SWEEP_DIR/energy_sweep_summary.csv" <<'PYCOV' 2>&1 | tee "$LOG_DIR/fix_${gpu}_coverage.log" || true
 import csv, sys, os
 from collections import defaultdict
@@ -385,8 +437,9 @@ PYCOV
 
     echo ""
     echo "========================================================================"
-    echo "  CATEGORY C FIX ($gpu) COMPLETE (sweep rc=$rc)"
-    echo "  Summary: $SWEEP_DIR/energy_sweep_summary.csv"
+    echo "  FULL FIX ($gpu) COMPLETE (sweep rc=$rc)"
+    echo "  Sweep:   $SWEEP_DIR/energy_sweep_summary.csv"
+    echo "  Summary: $RESULTS_DIR/energy_summary.csv"
     echo "  Finished: $(date)"
     echo "========================================================================"
     return "$rc"
