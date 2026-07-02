@@ -470,9 +470,21 @@ def main():
                 td = load_timing_from_csv(args.timing_csv, bench_name, sf)
                 if not td:
                     print(f"  [WARN] No timing data in CSV for {bench_name} SF={sf}, will calibrate")
+            # ClickBench SF20 exhausts VRAM + host RAM under -s gpu: the 20 GB
+            # preload plus a wide-aggregate query's intermediates (q28-q34, the
+            # ~90-way SUM) spill through managed memory until the kernel OOM-kills
+            # the process at a wandering query, leaving 0 summaries. It's the
+            # documented oversized-data case, so measure it with CPU storage
+            # (data stays on host, cuDF pulls what it needs) instead of the full
+            # GPU preload. See CLAUDE.md "GPU Memory and Storage Device".
+            q_storage = args.storage
+            if bench_name == "clickbench" and str(sf) == "20" and q_storage == "gpu":
+                q_storage = "cpu"
+                print(f"  [storage] {bench_name} SF={sf}: forcing -s cpu "
+                      f"(-s gpu OOM-crashes; see run_maximus_metrics.py)")
             run_metrics_for_benchmark(
                 bench_name, sf, data_path, cfg["queries"],
-                args.target_time, results_dir, storage=args.storage,
+                args.target_time, results_dir, storage=q_storage,
                 timing_data=td)
 
     print(f"\n{'=' * 70}")
