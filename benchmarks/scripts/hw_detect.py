@@ -59,6 +59,10 @@ def _parse_supported_sm_clocks(gpu_id: int) -> list[int]:
 def detect_gpu() -> dict[str, Any]:
     """Auto-detect the GPU with the most VRAM.
 
+    If the MAXIMUS_GPU_ID environment variable is set, that GPU index is
+    selected instead (used by run_all_benchmarks.sh --parallel to pin each
+    worker's compute, nvidia-smi sampling, and clock control to one GPU).
+
     Returns a dict with keys:
         index: int -- GPU index
         name: str -- GPU product name
@@ -75,6 +79,7 @@ def detect_gpu() -> dict[str, Any]:
         "--format=csv,noheader,nounits",
     ])
 
+    pinned = os.environ.get("MAXIMUS_GPU_ID")
     best = None
     for line in output.splitlines():
         parts = [p.strip() for p in line.split(",")]
@@ -86,6 +91,8 @@ def detect_gpu() -> dict[str, Any]:
         pmin = int(float(parts[3]))
         pmax = int(float(parts[4]))
         pdefault = int(float(parts[5]))
+        if pinned is not None and idx != int(pinned):
+            continue
         if best is None or vram > best["vram_mb"]:
             best = {
                 "index": idx,
@@ -97,6 +104,8 @@ def detect_gpu() -> dict[str, Any]:
             }
 
     if best is None:
+        if pinned is not None:
+            raise RuntimeError(f"MAXIMUS_GPU_ID={pinned} not found by nvidia-smi.")
         raise RuntimeError("No NVIDIA GPUs detected by nvidia-smi.")
 
     best["sm_clocks"] = _parse_supported_sm_clocks(best["index"])
