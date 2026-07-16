@@ -21,6 +21,18 @@
 #   bash run_all_benchmarks.sh --toy               # ~1-hour smoke of A1-C1: tpch only, 1 query, largest SF,
 #                                                  #   metrics target-time=120s, Category C = 2×2 (4 configs)
 #   bash run_all_benchmarks.sh --skip-category-c   # Skip energy sweep (A + B only)
+#   bash run_all_benchmarks.sh --parallel 4        # Fan the comprehensive run out over 4 GPUs
+#     Splits the campaign into independent per-benchmark work units (Cat A/B
+#     chains + one Cat C sweep per benchmark) and runs them on N GPUs at once.
+#     Each worker is pinned with CUDA_VISIBLE_DEVICES + MAXIMUS_GPU_ID (compute,
+#     nvidia-smi sampling, and sweep clock control all follow the pin) and gets
+#     an even slice of CPU cores via taskset when available. Cat A/B workers
+#     write to results/parallel_<ts>/gpu<i>/ and are merged back afterwards;
+#     sweep workers share results/energy_sweep (they partition by benchmark).
+#     Caveats: host-side RAPL columns (cpu_*) are contaminated by concurrent
+#     workers — GPU energy is per-device and unaffected; the Cat C sweep needs
+#     passwordless sudo for nvidia-smi on every pinned GPU. Not combinable
+#     with --fix-A100/--fix-H100.
 #
 #   bash run_all_benchmarks.sh --fix-A100          # One-click full repair of the A100 results
 #   bash run_all_benchmarks.sh --fix-H100          # One-click full repair of the H100 results
@@ -65,11 +77,18 @@ MIN_FLAG=""
 TOY_FLAG=""
 SKIP_CATEGORY_C=0
 FIX_GPU=""
+PARALLEL_N=1
+_EXPECT_PARALLEL_N=0
 # Metrics sampling window (seconds). Toy mode caps it at 120s (2 min) so the
 # whole A+B+C smoke completes in ~1h; full/test/minimum keep the short 5s window.
 METRICS_TT=5
 for arg in "$@"; do
+    if [ "$_EXPECT_PARALLEL_N" -eq 1 ]; then
+        PARALLEL_N="$arg"; _EXPECT_PARALLEL_N=0; continue
+    fi
     case "$arg" in
+        --parallel) _EXPECT_PARALLEL_N=1 ;;
+        --parallel=*) PARALLEL_N="${arg#--parallel=}" ;;
         --test) TEST_FLAG="--test" ;;
         --minimum|--min) MIN_FLAG="--minimum" ;;
         --toy) TOY_FLAG="--toy"; METRICS_TT=120 ;;
@@ -79,6 +98,18 @@ for arg in "$@"; do
         *) echo "Unknown argument: $arg"; exit 1 ;;
     esac
 done
+if ! [[ "$PARALLEL_N" =~ ^[0-9]+$ ]] || [ "$PARALLEL_N" -lt 1 ]; then
+    echo "ERROR: --parallel expects a positive integer (got '$PARALLEL_N')"; exit 1
+fi
+if [ "$PARALLEL_N" -gt 1 ] && [ -n "$FIX_GPU" ]; then
+    echo "ERROR: --parallel cannot be combined with --fix-A100/--fix-H100"; exit 1
+fi
+if [ "$PARALLEL_N" -gt 1 ]; then
+    _NGPU=$(nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null | wc -l | tr -d ' ')
+    if [ -z "$_NGPU" ] || [ "$_NGPU" -lt "$PARALLEL_N" ]; then
+        echo "ERROR: --parallel $PARALLEL_N requested but only ${_NGPU:-0} GPU(s) visible"; exit 1
+    fi
+fi
 EXTRA_FLAGS="$EXTRA_FLAGS $TEST_FLAG $MIN_FLAG $TOY_FLAG"
 
 MODE="FULL"
@@ -477,9 +508,125 @@ run_step() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════
+#  --parallel N : fan the campaign out over N GPUs
+#
+#  Work units are independent per-benchmark chains (internal dependencies
+#  stay inside one unit, e.g. Maximus metrics reuses the timing CSV written
+#  moments earlier by the same unit in the same worker dir):
+#      A_maximus_<bench> = A1(bench) ; A3(bench)
+#      A_sirius_<bench>  = A2(bench) ; A4(bench)
+#      B_maximus_<bench> = B1(bench) ; B2(bench)
+#      B_sirius_<bench>  = B3(bench)
+#      C_sweep_<bench>   = full 5x5 sweep for one benchmark (shared sweep dir;
+#                          clocks are set per-GPU via MAXIMUS_GPU_ID)
+#  Workers pop units from a flock(1)-guarded queue. Cat A/B units write to
+#  $RESULTS_DIR/parallel_<ts>/gpu<i>/ and merge_parallel_results.py folds
+#  them back; sweep units write straight into $RESULTS_DIR/energy_sweep.
+# ══════════════════════════════════════════════════════════════════════════
+
+PARALLEL_ROOT="$RESULTS_DIR/parallel_${TIMESTAMP}"
+QUEUE_FILE="$PARALLEL_ROOT/queue.txt"
+QUEUE_LOCK="$PARALLEL_ROOT/queue.lock"
+
+parallel_unit_cmds() {
+    # Emit the shell command(s) for one unit into stdout. $1=unit $2=outdir
+    local unit="$1" out="$2" bench="${1#*_*_}"
+    case "$unit" in
+        A_maximus_*)
+            echo "python3 run_maximus_benchmark.py $EXTRA_FLAGS --n-reps 3 --results-dir '$out' $bench && \
+python3 run_maximus_metrics.py $EXTRA_FLAGS --target-time $METRICS_TT --results-dir '$out' --timing-csv '$out/maximus_benchmark.csv' $bench" ;;
+        A_sirius_*)
+            echo "python3 run_sirius_benchmark.py $EXTRA_FLAGS --results-dir '$out' $bench && \
+python3 run_sirius_metrics.py $EXTRA_FLAGS --target-time $METRICS_TT --results-dir '$out' $bench" ;;
+        B_maximus_*)
+            echo "python3 run_maximus_cpu_data.py $EXTRA_FLAGS --timing-only --results-dir '$out' $bench && \
+python3 run_maximus_cpu_data.py $EXTRA_FLAGS --target-time $METRICS_TT --results-dir '$out' --timing-csv '$out/maximus_cpu_data_timing.csv' $bench" ;;
+        B_sirius_*)
+            echo "python3 run_sirius_cpu_data.py $EXTRA_FLAGS --n-reps 10 --results-dir '$out' $bench" ;;
+        C_sweep_*)
+            echo "python3 run_energy_sweep.py $EXTRA_FLAGS --benchmarks $bench --results-dir '$RESULTS_DIR/energy_sweep' --resume" ;;
+    esac
+}
+
+parallel_worker() {
+    # $1 = worker id (0..N-1). Pinned to physical GPU $1 and a core slice.
+    local wid="$1"
+    local wdir="$PARALLEL_ROOT/gpu${wid}"
+    mkdir -p "$wdir"
+    local ncores=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 0)
+    local pin=""
+    if command -v taskset >/dev/null 2>&1 && [ "$ncores" -ge "$PARALLEL_N" ]; then
+        local per=$(( ncores / PARALLEL_N ))
+        local lo=$(( wid * per )); local hi=$(( lo + per - 1 ))
+        pin="taskset -c ${lo}-${hi}"
+    fi
+    while :; do
+        local unit
+        unit=$(flock "$QUEUE_LOCK" sh -c "head -n1 '$QUEUE_FILE' 2>/dev/null; sed -i.bak '1d' '$QUEUE_FILE' 2>/dev/null")
+        [ -z "$unit" ] && break
+        echo "[gpu${wid}] START $unit ($(date))"
+        local cmd; cmd=$(parallel_unit_cmds "$unit" "$wdir")
+        if MAXIMUS_GPU_ID="$wid" CUDA_VISIBLE_DEVICES="$wid" \
+             bash -c "cd '$SCRIPT_DIR' && $pin $cmd" \
+             > "$LOG_DIR/par_gpu${wid}_${unit}.log" 2>&1; then
+            echo "[gpu${wid}] DONE  $unit ($(date))"
+        else
+            echo "[gpu${wid}] WARN  $unit exited non-zero — see $LOG_DIR/par_gpu${wid}_${unit}.log"
+        fi
+    done
+}
+
+run_parallel_campaign() {
+    mkdir -p "$PARALLEL_ROOT"
+    : > "$QUEUE_FILE"; : > "$QUEUE_LOCK"
+    # Longest units first so the tail of the schedule stays packed.
+    if [ "$SKIP_CATEGORY_C" -eq 0 ]; then
+        for b in tpch h2o clickbench case_bench; do echo "C_sweep_${b}" >> "$QUEUE_FILE"; done
+    fi
+    for b in $ALL_BENCH;  do echo "A_maximus_${b}" >> "$QUEUE_FILE"; done
+    if has_sirius; then
+        for b in $ALL_BENCH; do echo "A_sirius_${b}" >> "$QUEUE_FILE"; done
+    fi
+    for b in $CPU_BENCH; do echo "B_maximus_${b}" >> "$QUEUE_FILE"; done
+    if has_sirius; then
+        for b in $CPU_BENCH; do echo "B_sirius_${b}" >> "$QUEUE_FILE"; done
+    fi
+
+    echo ""
+    echo "======== PARALLEL CAMPAIGN: $(wc -l < "$QUEUE_FILE") units on $PARALLEL_N GPUs ========"
+    if [ "${PARALLEL_DRY_RUN:-0}" = "1" ]; then
+        echo "[dry-run] queue:"; cat "$QUEUE_FILE"; return 0
+    fi
+
+    local pids=()
+    for i in $(seq 0 $(( PARALLEL_N - 1 ))); do
+        parallel_worker "$i" &
+        pids+=($!)
+    done
+    for p in "${pids[@]}"; do wait "$p"; done
+
+    run_step "parallel_merge" \
+        python3 merge_parallel_results.py "$PARALLEL_ROOT" "$RESULTS_DIR"
+
+    # One final aggregation pass over the shared sweep dir: with --resume and
+    # every config complete it skips all measurements and just rebuilds
+    # energy_sweep_summary.csv from the per-config files.
+    if [ "$SKIP_CATEGORY_C" -eq 0 ]; then
+        run_step "C1_sweep_aggregate" \
+            python3 run_energy_sweep.py $EXTRA_FLAGS \
+            --benchmarks tpch h2o clickbench case_bench \
+            --results-dir "$RESULTS_DIR/energy_sweep" --resume
+    fi
+}
+
+# ══════════════════════════════════════════════════════════════════════════
 #  Category A: Data on GPU (-s gpu) — timing + power/energy metrics
 #  Standard SQL benchmarks + microbenchmarks (GPU memory auto-checked)
 # ══════════════════════════════════════════════════════════════════════════
+
+if [ "$PARALLEL_N" -gt 1 ]; then
+    run_parallel_campaign
+else
 
 echo ""
 echo "======== CATEGORY A: Data on GPU (timing + metrics) ========"
@@ -558,6 +705,8 @@ else
         --results-dir "$RESULTS_DIR/energy_sweep" \
         --resume
 fi
+
+fi   # end sequential path (--parallel 1)
 
 # ══════════════════════════════════════════════════════════════════════════
 #  Energy Summary: aggregate Category A metrics into unified energy report
