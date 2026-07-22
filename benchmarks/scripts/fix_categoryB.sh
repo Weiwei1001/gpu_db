@@ -1,23 +1,52 @@
 #!/usr/bin/env bash
-# Category-B (cold) repair: re-measure Sirius load-inclusive first runs for
-# ClickBench (all scales) and H2O (all scales), writing into results/fix/.
+# Repair run for every re-runnable gap in the A100/H100 campaigns
+# (2026-07 audit). Auto-detects the GPU and runs the stages that apply.
+# All new measurements go to results/fix/ (sweep repairs go to the live
+# sweep dir, which is resume-keyed).
 #
-# Fixes, per the 2026-07 audit:
-#   * A100/H100 ClickBench cold: original campaign's first runs never
-#     exercised the load path (flat ~0.3 s at idle power);
-#   * A100 H2O 1/2/4 GB cold: original campaign ran on truncated DuckDBs;
-#   * H100 ClickBench cold energy: previously estimated, now measured.
+# Both boxes:
+#   B. Sirius Category-B cold re-run, ClickBench + H2O (fresh process per
+#      query, load inside the timed window). Fixes: A100 CB cold (never
+#      measured validly), A100 H2O 1/2/4GB cold (truncated inputs),
+#      H100 CB cold (replaces suite-level latency + estimated energy).
+# H100 only:
+#   T. Maximus timing (A1) re-run at default clocks. The May timing ran
+#      under leftover sweep clock caps; this replaces the reconstructed
+#      latencies with direct measurement. Clocks are reset first.
+# A100 only:
+#   M. Maximus H2O 1/2GB hot metrics re-measure (single-vintage cleanup).
+#   S. Cat-C sweep repair: delete the Sirius H2O 1/2GB cells (swept on
+#      truncated DuckDBs; the monotonicity purge cannot catch them) and
+#      resume the sweep for sirius/h2o only.
 #
-# Guards first: refuses to run against an empty or truncated database, the
-# failure mode that silently invalidated the May campaign.
+# NOT re-runnable (documented exclusions, do not chase):
+#   - Maximus cold TPC-H SF1 / CB SF1+SF5: below reconstruction resolution.
+#   - Maximus cold-vs-warm ratios: harness time-base mismatch.
+#   - A100 Maximus TPC-H SF20 hot 10/22: genuine OOM.
 #
-# Usage (on each GPU box):  bash benchmarks/scripts/fix_categoryB.sh
+# Run ALONE on the box (no concurrent jobs): cold load measurements need an
+# uncontended host path.
+#
+# Usage:  bash benchmarks/scripts/fix_categoryB.sh
 set -euo pipefail
 cd "$(dirname "$0")/../.."   # repo root
 
 DUCKDB=sirius/build/release/duckdb
 FIX_DIR=results/fix
 mkdir -p "$FIX_DIR"
+
+GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader -i "${GPU_ID:-0}" | head -1)
+echo "== GPU: $GPU_NAME =="
+case "$GPU_NAME" in
+  *A100*)  BOX=A100 ;;
+  *H100*)  BOX=H100 ;;
+  *)       BOX=OTHER ;;
+esac
+
+echo "== reset clocks/power to defaults (sweep leftovers are the enemy) =="
+(nvidia-smi -rgc && nvidia-smi -rmc) 2>/dev/null || \
+  sudo -n nvidia-smi -rgc 2>/dev/null || \
+  echo "  [WARN] could not reset clocks; verify 'nvidia-smi -q -d CLOCK' manually"
 
 echo "== data guards (row counts must match canonical sizes) =="
 python3 - <<'EOF'
@@ -49,8 +78,25 @@ for sf in (1, 5, 10, 20):
 sys.exit(1 if fail else 0)
 EOF
 
-echo "== Category B re-run (fresh DuckDB process per query; load inside the timed window) =="
+echo "== [B] Sirius Category-B cold re-run: clickbench + h2o -> $FIX_DIR =="
 python3 benchmarks/scripts/run_sirius_cpu_data.py clickbench h2o --results-dir "$FIX_DIR"
 
-echo "== done — outputs in $FIX_DIR =="
+if [ "$BOX" = "H100" ]; then
+  echo "== [T] H100: Maximus timing re-run at default clocks -> $FIX_DIR =="
+  python3 benchmarks/scripts/run_maximus_benchmark.py tpch h2o clickbench \
+      --results-dir "$FIX_DIR"
+fi
+
+if [ "$BOX" = "A100" ]; then
+  echo "== [M] A100: Maximus H2O 1/2GB hot metrics (vintage cleanup) -> $FIX_DIR =="
+  python3 benchmarks/scripts/run_maximus_metrics.py h2o --sf 1gb --results-dir "$FIX_DIR"
+  python3 benchmarks/scripts/run_maximus_metrics.py h2o --sf 2gb --results-dir "$FIX_DIR"
+
+  echo "== [S] A100: purge truncated-input sweep cells + resume sirius/h2o sweep =="
+  rm -fv results/energy_sweep/*/sirius_h2o_sf1gb_metrics_*.csv \
+         results/energy_sweep/*/sirius_h2o_sf2gb_metrics_*.csv
+  python3 benchmarks/scripts/run_energy_sweep.py --engines sirius --benchmarks h2o --resume
+fi
+
+echo "== done — new measurements in $FIX_DIR (sweep repairs in results/energy_sweep) =="
 ls -la "$FIX_DIR"
