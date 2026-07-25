@@ -13,6 +13,12 @@
 #   T. Maximus timing (A1) re-run at default clocks. The May timing ran
 #      under leftover sweep clock caps; this replaces the reconstructed
 #      latencies with direct measurement. Clocks are reset first.
+# RTX6000 only (RUN ALONE — single job on the whole box; the July campaign
+# ran under 8-GPU contention, which is why its cold data is held out):
+#   B. extends the Sirius cold re-run to TPC-H as well.
+#   H. Maximus ClickBench SF20 device-resident (97.9GB VRAM fits it; the
+#      <90GB CPU-storage rule no longer fires here).
+#   S. Maximus streaming campaign for the cold-table rows.
 # A100 only:
 #   M. Maximus H2O 1/2GB hot metrics re-measure (single-vintage cleanup).
 #   S. Cat-C sweep repair: delete the Sirius H2O 1/2GB cells (swept on
@@ -38,9 +44,10 @@ mkdir -p "$FIX_DIR"
 GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader -i "${GPU_ID:-0}" | head -1)
 echo "== GPU: $GPU_NAME =="
 case "$GPU_NAME" in
-  *A100*)  BOX=A100 ;;
-  *H100*)  BOX=H100 ;;
-  *)       BOX=OTHER ;;
+  *A100*)      BOX=A100 ;;
+  *H100*)      BOX=H100 ;;
+  *RTX*6000*)  BOX=RTX6000 ;;
+  *)           BOX=OTHER ;;
 esac
 
 echo "== reset clocks/power to defaults (sweep leftovers are the enemy) =="
@@ -78,8 +85,12 @@ for sf in (1, 5, 10, 20):
 sys.exit(1 if fail else 0)
 EOF
 
-echo "== [B] Sirius Category-B cold re-run: clickbench + h2o -> $FIX_DIR =="
-python3 benchmarks/scripts/run_sirius_cpu_data.py clickbench h2o --results-dir "$FIX_DIR"
+COLD_BENCHES="clickbench h2o"
+if [ "$BOX" = "RTX6000" ]; then
+  COLD_BENCHES="tpch clickbench h2o"   # RTX has no uncontended cold data at all
+fi
+echo "== [B] Sirius Category-B cold re-run: $COLD_BENCHES -> $FIX_DIR =="
+python3 benchmarks/scripts/run_sirius_cpu_data.py $COLD_BENCHES --results-dir "$FIX_DIR"
 
 if [ "$BOX" = "H100" ]; then
   echo "== [T] H100: Maximus timing re-run at default clocks -> $FIX_DIR =="
@@ -96,6 +107,20 @@ if [ "$BOX" = "A100" ]; then
   rm -fv results/energy_sweep/*/sirius_h2o_sf1gb_metrics_*.csv \
          results/energy_sweep/*/sirius_h2o_sf2gb_metrics_*.csv
   python3 benchmarks/scripts/run_energy_sweep.py --engines sirius --benchmarks h2o --resume
+fi
+
+if [ "$BOX" = "RTX6000" ]; then
+  echo "== [H] RTX6000: Maximus ClickBench SF20 device-resident (fills the last hot cell) =="
+  # requires the VRAM-conditional storage rule (>=90GB runs -s gpu)
+  python3 benchmarks/scripts/run_maximus_metrics.py clickbench --sf 20 --storage gpu \
+      --results-dir "$FIX_DIR"
+
+  echo "== [S] RTX6000: Maximus streaming campaign, uncontended (cold-table rows) =="
+  python3 benchmarks/scripts/run_maximus_cpu_data.py --timing-only \
+      --results-dir "$FIX_DIR" tpch h2o clickbench
+  python3 benchmarks/scripts/run_maximus_cpu_data.py \
+      --results-dir "$FIX_DIR" --timing-csv "$FIX_DIR/maximus_cpu_data_timing.csv" \
+      tpch h2o clickbench
 fi
 
 echo "== done — new measurements in $FIX_DIR (sweep repairs in results/energy_sweep) =="

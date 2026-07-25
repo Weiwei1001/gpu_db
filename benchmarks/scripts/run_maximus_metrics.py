@@ -478,10 +478,11 @@ def main():
             # (data stays on host, cuDF pulls what it needs) instead of the full
             # GPU preload. See CLAUDE.md "GPU Memory and Storage Device".
             q_storage = args.storage
-            if bench_name == "clickbench" and str(sf) == "20" and q_storage == "gpu":
+            if (bench_name == "clickbench" and str(sf) == "20"
+                    and q_storage == "gpu" and gpu_info["vram_mb"] < 90_000):
                 q_storage = "cpu"
                 print(f"  [storage] {bench_name} SF={sf}: forcing -s cpu "
-                      f"(-s gpu OOM-crashes; see run_maximus_metrics.py)")
+                      f"(-s gpu OOM-crashes on <90GB VRAM; see run_maximus_metrics.py)")
             run_metrics_for_benchmark(
                 bench_name, sf, data_path, cfg["queries"],
                 args.target_time, results_dir, storage=q_storage,
