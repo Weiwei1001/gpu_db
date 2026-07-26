@@ -10,19 +10,21 @@
 # Stage MT Maximus -s cpu timing (3 reps per query, direct latency).
 # Stage MM Maximus -s cpu metrics (steady-state power/energy sampling).
 #
-# Default is fully sequential on GPU 0 (safest; ~10-11 h total).
-# --parallel fans the Maximus stages out per-benchmark across GPUs 1-3
-# AFTER the Sirius stage finishes (~6-7 h wall). The Maximus latencies are
-# host-path sensitive too, so prefer sequential when the numbers matter.
+# Default = Stage S + Stage MT only (~2 h, sequential, GPU 0). The metrics
+# stage (MM, ~9 h of power sampling) is opt-in via --with-metrics; the
+# existing July streaming-energy data is same-protocol and stays valid.
 #
-# Usage:  bash benchmarks/scripts/rerun_rtx6000_cold.sh [--parallel]
+# Usage:  bash benchmarks/scripts/rerun_rtx6000_cold.sh [--with-metrics] [--parallel]
 set -euo pipefail
 cd "$(dirname "$0")/../.."   # repo root
 
 FIX_DIR=results/fix
 mkdir -p "$FIX_DIR"
-PARALLEL=0
-[ "${1:-}" = "--parallel" ] && PARALLEL=1
+PARALLEL=0; METRICS=0
+for a in "$@"; do
+  [ "$a" = "--parallel" ] && PARALLEL=1
+  [ "$a" = "--with-metrics" ] && METRICS=1
+done
 
 GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader -i 0 | head -1)
 echo "== GPU: $GPU_NAME =="
@@ -50,12 +52,14 @@ python3 benchmarks/scripts/run_sirius_cpu_data.py tpch clickbench h2o \
 run_maximus () {  # $1 = benchmark list, $2 = results dir
   python3 benchmarks/scripts/run_maximus_cpu_data.py --timing-only \
       --results-dir "$2" $1
-  python3 benchmarks/scripts/run_maximus_cpu_data.py \
-      --results-dir "$2" --timing-csv "$2/maximus_cpu_data_timing.csv" $1
+  if [ "$METRICS" = "1" ]; then
+    python3 benchmarks/scripts/run_maximus_cpu_data.py \
+        --results-dir "$2" --timing-csv "$2/maximus_cpu_data_timing.csv" $1
+  fi
 }
 
 if [ "$PARALLEL" = "0" ]; then
-  echo "== [MT+MM] Maximus -s cpu, sequential on GPU 0 (~9 h) =="
+  echo "== [MT] Maximus -s cpu timing on GPU 0 (~30 min; +metrics ~9 h if --with-metrics) =="
   run_maximus "tpch h2o clickbench case_bench" "$FIX_DIR"
 else
   echo "== [MT+MM] Maximus -s cpu, per-benchmark on GPUs 1-3 (~5 h wall) =="
