@@ -108,3 +108,4 @@ setup.log
 # Python
 *.pyc
 __pycache__/
+.worktrees/
