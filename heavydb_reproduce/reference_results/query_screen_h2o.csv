@@ -1,0 +1,11 @@
+suite,query,db,ok,exec_ms,wall_s,error
+h2o,q1,h2o_1gb,True,278.0,0.54,
+h2o,q2,h2o_1gb,True,246.0,0.53,
+h2o,q3,h2o_1gb,True,322.0,23.23,
+h2o,q4,h2o_1gb,True,316.0,0.59,
+h2o,q5,h2o_1gb,True,272.0,0.75,
+h2o,q6,h2o_1gb,True,542.0,0.84,
+h2o,q7,h2o_1gb,True,622.0,13.84,
+h2o,q8,h2o_1gb,True,246.0,0.9,
+h2o,q9,h2o_1gb,True,544.0,0.83,
+h2o,q10,h2o_1gb,True,895.0,173.31,

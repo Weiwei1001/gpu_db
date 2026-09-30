@@ -1,0 +1,1 @@
+SELECT SearchPhrase, APPROX_COUNT_DISTINCT(UserID, 7) AS u FROM t WHERE SearchPhrase <> '' GROUP BY SearchPhrase ORDER BY u DESC LIMIT 10;

@@ -1,0 +1,10 @@
+#!/bin/bash
+# hsql <db> ["sql"]   —— 不给 sql 就从 stdin 读
+HB_ROOT="${HB_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+HEAVYDB_HOME="${HEAVYDB_HOME:-$HB_ROOT/heavydb}"
+DEPS_PREFIX="${DEPS_PREFIX:-/usr/local/mapd-deps}"
+export LD_LIBRARY_PATH="$DEPS_PREFIX/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
+DB="${1:-heavyai}"; shift
+BIN="$HEAVYDB_HOME/build/bin/heavysql"
+if [ $# -gt 0 ]; then printf '%s\n' "$*" | "$BIN" "$DB" -u admin -p HyperInteractive --quiet
+else "$BIN" "$DB" -u admin -p HyperInteractive --quiet; fi

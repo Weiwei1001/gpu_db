@@ -1,0 +1,44 @@
+suite,query,db,ok,exec_ms,wall_s,error
+clickbench,q0,cb_sf1,True,234.0,0.51,
+clickbench,q1,cb_sf1,True,279.0,0.56,
+clickbench,q2,cb_sf1,True,236.0,0.52,
+clickbench,q3,cb_sf1,True,267.0,0.54,
+clickbench,q4,cb_sf1,False,,0.52,OUT_OF_CPU_MEM: Not enough host memory to execute the query
+clickbench,q5,cb_sf1,True,251.0,0.53,
+clickbench,q6,cb_sf1,True,528.0,0.8,
+clickbench,q7,cb_sf1,True,282.0,0.57,
+clickbench,q8,cb_sf1,False,,0.54,OUT_OF_CPU_MEM: Not enough host memory to execute the query
+clickbench,q9,cb_sf1,False,,0.56,OUT_OF_CPU_MEM: Not enough host memory to execute the query
+clickbench,q10,cb_sf1,False,,0.55,OUT_OF_CPU_MEM: Not enough host memory to execute the query
+clickbench,q11,cb_sf1,False,,0.58,OUT_OF_CPU_MEM: Not enough host memory to execute the query
+clickbench,q12,cb_sf1,True,264.0,0.56,
+clickbench,q13,cb_sf1,False,,0.55,OUT_OF_CPU_MEM: Not enough host memory to execute the query
+clickbench,q14,cb_sf1,True,697.0,0.98,
+clickbench,q15,cb_sf1,True,573.0,0.88,
+clickbench,q16,cb_sf1,True,756.0,1.05,
+clickbench,q17,cb_sf1,True,11.0,0.3,
+clickbench,q18,cb_sf1,True,736.0,1.03,
+clickbench,q19,cb_sf1,True,531.0,0.82,
+clickbench,q20,cb_sf1,True,280.0,0.55,
+clickbench,q21,cb_sf1,False,,0.28,Aggregate on TEXT is not supported yet.
+clickbench,q22,cb_sf1,False,,0.29,Aggregate on TEXT is not supported yet.
+clickbench,q23,cb_sf1,False,,0.29,Aggregate on TEXT is not supported yet.
+clickbench,q24,cb_sf1,True,520.0,0.81,
+clickbench,q25,cb_sf1,True,470.0,0.75,
+clickbench,q26,cb_sf1,True,267.0,0.54,
+clickbench,q27,cb_sf1,False,,0.27,"Query requires one or more casts between none-encoded and dictionary-encoded strings, and the estimated table size (1428236 rows) exceeds the configured watchdog none-encoded string translation limit "
+clickbench,q28,cb_sf1,True,,0.28,
+clickbench,q29,cb_sf1,True,594.0,0.88,
+clickbench,q30,cb_sf1,True,751.0,1.02,
+clickbench,q31,cb_sf1,True,763.0,1.06,
+clickbench,q32,cb_sf1,True,712.0,1.0,
+clickbench,q33,cb_sf1,True,283.0,0.57,
+clickbench,q34,cb_sf1,True,257.0,0.53,
+clickbench,q35,cb_sf1,True,673.0,0.95,
+clickbench,q36,cb_sf1,True,286.0,0.58,
+clickbench,q37,cb_sf1,True,289.0,0.56,
+clickbench,q38,cb_sf1,True,262.0,0.55,
+clickbench,q39,cb_sf1,True,706.0,0.99,
+clickbench,q40,cb_sf1,True,805.0,1.1,
+clickbench,q41,cb_sf1,True,762.0,1.05,
+clickbench,q42,cb_sf1,True,276.0,0.57,
