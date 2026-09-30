@@ -1,23 +1,28 @@
 #!/bin/bash
 # 一键全量：自动选一张空闲 GPU → 检查 sudo/磁盘 → 自动发现现成数据（没有就生成/下载）→ 构建（如需）→ Cat A/B/C
 #
-#   ./run_full.sh                                  # 全部默认：Cat C 按 repo 规格（每个网格点重跑 A+B，约 4–5 天）
-#   ./run_full.sh --catc-scope lite                # Cat C 只跑 6 条代表 query（A+B 约 4.5 h + 25 min）
+#   ./run_full.sh                                  # 全部默认：A + B + Cat C lite（6 条代表 query），单卡 H100 约 5.5 h
+#   ./run_full.sh --catc-scope ab                  # Cat C 按 repo 规格（每个网格点重跑 A+B，约 4–5 天）
 #   ./run_full.sh --data-roots /path/gpu_db:/path/other --data-dir /bigdisk/hb_repro
+#
+#   One command from a fresh machine:
+#     git clone -b heavydb-reproduce https://github.com/Weiwei1001/gpu_db.git && gpu_db/heavydb_reproduce/run_full.sh
 #
 # 选项：
 #   --gpu N            指定卡；不给则自动选：只有一张卡就用它，多张卡取第一张没有任何进程的
 #   --data-roots A:B   现成数据的搜索根（别人跑 gpu_db 留下的 tests/ 目录、csv-*/、*.duckdb、hits.parquet）
 #                      默认自动查：--data-dir、~/gpu_db、本包同级的 gpu_db
 #   --data-dir DIR     HeavyDB 库与临时文件目录（全量约 70 GB；默认本包下 data/，空间不够会提示）
-#   其余参数原样传给 reproduce.sh（--skip-build、--heavydb-home、--catc-scope、--catc-limit、--stages ...）
+#   --catc-scope S     Cat C 范围：lite（默认）| a | ab；见 reproduce.sh
+#   其余参数原样传给 reproduce.sh（--skip-build、--heavydb-home、--catc-limit、--stages ...）
 set -euo pipefail
 HB_ROOT="$(cd "$(dirname "$0")" && pwd)"
 log(){ echo "[$(date +%T)] [full] $*"; }
-GPU="" DATA_DIR="$HB_ROOT/data" ROOTS="" PASS=()
+GPU="" DATA_DIR="$HB_ROOT/data" ROOTS="" CATC_SCOPE="lite" PASS=()
 while [ $# -gt 0 ]; do case "$1" in
   --gpu) GPU="$2"; shift 2;; --data-roots) ROOTS="$2"; shift 2;; --data-dir) DATA_DIR="$2"; shift 2;;
-  -h|--help) sed -n '2,16p' "$0"; exit 0;; *) PASS+=("$1"); shift;; esac; done
+  --catc-scope) CATC_SCOPE="$2"; shift 2;;
+  -h|--help) sed -n '2,17p' "$0"; exit 0;; *) PASS+=("$1"); shift;; esac; done
 
 # ---------- GPU ----------
 command -v nvidia-smi >/dev/null || { log "!! 没有 nvidia-smi"; exit 1; }
@@ -54,4 +59,5 @@ done
 [ "$found" -gt 0 ] && log "找到 $found 项，能对上的数据集直接导入；其余生成/下载" || log "没找到现成数据，全部生成/下载（ClickBench 需要访问 datasets.clickhouse.com）"
 
 # ---------- 跑 ----------
-exec "$HB_ROOT/reproduce.sh" --gpu "$GPU" --full --data-dir "$DATA_DIR" "${PASS[@]}"
+log "Cat C 范围：$CATC_SCOPE（lite 约 25 min；ab 约 4–5 天，用 --catc-scope ab 选择）"
+exec "$HB_ROOT/reproduce.sh" --gpu "$GPU" --full --data-dir "$DATA_DIR" --catc-scope "$CATC_SCOPE" "${PASS[@]}"

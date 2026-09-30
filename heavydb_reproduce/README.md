@@ -3,9 +3,19 @@
 对齐 `gpu_db` 论文 harness 的三类实验（Category A / B / C），在 HeavyDB 上跑
 TPC-H、H2O、ClickBench、case_bench 四个 benchmark，**单卡**测量。
 
+**Quick start (one command, fresh Ubuntu machine with an NVIDIA GPU and sudo):**
+
 ```bash
-./run_full.sh                                  # 一键全量：自动选空闲 GPU、自动找现成数据、构建、Cat A/B/C（C 按 repo 规格）
-./run_full.sh --catc-scope lite --data-dir /bigdisk/hb_repro --data-roots /path/to/gpu_db   # 常用组合
+git clone -b heavydb-reproduce https://github.com/Weiwei1001/gpu_db.git && gpu_db/heavydb_reproduce/run_full.sh
+```
+
+It picks an idle GPU, builds HeavyDB, prepares the data (about 70 GB), and runs Category A, B, and C-lite.
+About 5.5 h on one H100. Results land in `gpu_db/heavydb_reproduce/results/full/`. Add `--data-dir /bigdisk/x`
+if the root disk is small, and `--catc-scope ab` for the full 4–5 day Category C grid.
+
+```bash
+./run_full.sh                                  # 一键全量：自动选空闲 GPU、自动找现成数据、构建、Cat A/B + C lite（默认）
+./run_full.sh --catc-scope ab --data-dir /bigdisk/hb_repro --data-roots /path/to/gpu_db   # Cat C 按 repo 规格
 ./reproduce.sh --gpu 4 --smoke                 # 极小数据全链路验证（不含编译约 10 分钟）
 ./reproduce.sh --gpu 4 --full --data-dir /data/$USER/hb_repro   # 全量：A+B 约 4.5 h；Cat C 默认按 repo 规格（见下）
 ./reproduce.sh --gpu 4 --full --catc-scope ab --catc-limit 1      # Cat C 测试：每个 benchmark×SF 只跑 1 条（约 7 h）
@@ -28,9 +38,9 @@ HB_SFS_TPCH="1 10" HB_SFS_H2O="1 4" HB_SFS_CB="1 10" ./reproduce.sh --gpu 4 --fu
 
 | 选项 | 含义 | 全量耗时（单卡 H100） |
 |---|---|---|
-| `--catc-scope ab`（默认） | 每个网格点重跑 A + B（repo 规格） | 约 4–5 天 |
+| `--catc-scope ab`（`reproduce.sh` 默认） | 每个网格点重跑 A + B（repo 规格） | 约 4–5 天 |
 | `--catc-scope a` | 每个网格点只重跑 A | 约 1 天 |
-| `--catc-scope lite` | 6 条代表 query（tpch q1/q6、h2o q1/q3、clickbench q0/q31） | 约 25 min |
+| `--catc-scope lite`（`run_full.sh` 默认） | 6 条代表 query（tpch q1/q6、h2o q1/q3、clickbench q0/q31） | 约 25 min |
 | `--catc-limit N` | 配合 ab/a：每个 benchmark×SF 只跑筛查可跑的前 N 条（测试用） | N=1、ab：约 7 h |
 
 **数据自动发现（full 模式）**：别人跑过 gpu_db 的 Maximus/Sirius 时，机器上通常已有数据。阶段 2 会在
