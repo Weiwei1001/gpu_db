@@ -47,7 +47,12 @@ IMPORT_PATHS="[\"$HB_ROOT\"${HB_DATA_DIR:+,\"$HB_DATA_DIR\"}]"
 export PY="$HB_ROOT/venv/bin/python"
 if [ ! -f "$HB_ROOT/venv/.ok" ]; then
   log "创建 venv（duckdb / pyarrow / matplotlib）"
-  python3 -m venv "$HB_ROOT/venv" && "$PY" -m pip install -q --upgrade pip \
+  if ! python3 -m venv "$HB_ROOT/venv" 2>/dev/null; then        # 全新 Ubuntu 没有 python3-venv
+    log "python3 -m venv 失败，安装 python3-venv 后重试"; rm -rf "$HB_ROOT/venv"
+    sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-venv python3-pip >/dev/null
+    python3 -m venv "$HB_ROOT/venv"
+  fi
+  "$PY" -m pip install -q --upgrade pip \
     && "$PY" -m pip install -q duckdb pyarrow matplotlib numpy && touch "$HB_ROOT/venv/.ok"
 fi
 

@@ -13,6 +13,7 @@ log(){ echo "[$(date +%T)] [build] $*"; }
 
 # ---------- 1. apt ----------
 log "apt 依赖"
+sudo apt-get update -qq
 sudo apt-get install -y --no-install-recommends \
   gcc-11 g++-11 cmake ninja-build bison flex maven openjdk-21-jdk-headless \
   llvm-14-dev clang-14 libclang-14-dev libboost-all-dev \
@@ -22,7 +23,7 @@ sudo apt-get install -y --no-install-recommends \
   libdouble-conversion-dev libevent-dev libunwind-dev libxerces-c-dev \
   libpng-dev libjpeg-dev libtiff-dev libgif-dev libwebp-dev \
   libncurses-dev libsqlite3-dev librdkafka-dev liburiparser-dev libpcre2-dev \
-  curl git ca-certificates >/dev/null
+  python3-venv python3-pip curl git ca-certificates >/dev/null
 sudo mkdir -p "$DEPS_PREFIX"
 
 fetch(){ [ -f "$DL/$2" ] || curl -sSL --retry 3 -o "$DL/$2" "$1"; }
@@ -81,7 +82,7 @@ else log "H3 已存在，跳过"; fi
 # ---------- 6. HeavyDB 源码 ----------
 if [ ! -d "$HEAVYDB_HOME/.git" ]; then
   log "克隆 heavydb"
-  git clone -q https://github.com/heavyai/heavydb.git "$HEAVYDB_HOME" 2>&1 | grep -v "not a git repository" || true
+  git clone -q https://github.com/heavyai/heavydb.git "$HEAVYDB_HOME" || { log "!! 克隆 heavydb 失败（网络？）"; exit 1; }
 fi
 cd "$HEAVYDB_HOME"
 git checkout -q "${HEAVYDB_COMMIT:-b348f14}"
