@@ -1,0 +1,10 @@
+# 运行时产生的大目录，不入库
+heavydb/
+deps-src/
+venv/
+data/
+stage/
+logs/
+results/
+backup_*/
+__pycache__/

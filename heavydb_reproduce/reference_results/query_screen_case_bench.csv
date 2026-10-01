@@ -1,0 +1,6 @@
+suite,query,db,ok,exec_ms,wall_s,error
+case_bench,q1,tpch_sf1,True,6.0,0.26,
+case_bench,q2,tpch_sf1,True,488.0,0.75,
+case_bench,q3,tpch_sf1,True,252.0,0.5,
+case_bench,q4,tpch_sf1,True,264.0,0.52,
+case_bench,q5,tpch_sf1,True,246.0,0.51,

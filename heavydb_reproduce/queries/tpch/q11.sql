@@ -1,0 +1,2 @@
+SELECT sum(CAST(ps_supplycost AS DOUBLE) * CAST(ps_availqty AS DOUBLE)) * 0.0001000000 AS thresh FROM partsupp, supplier, nation WHERE ps_suppkey = s_suppkey AND s_nationkey = n_nationkey AND n_name = 'GERMANY';
+SELECT ps_partkey, sum(CAST(ps_supplycost AS DOUBLE) * CAST(ps_availqty AS DOUBLE)) AS total_value FROM partsupp, supplier, nation WHERE ps_suppkey = s_suppkey AND s_nationkey = n_nationkey AND n_name = 'GERMANY' GROUP BY ps_partkey HAVING sum(CAST(ps_supplycost AS DOUBLE) * CAST(ps_availqty AS DOUBLE)) > 62992824.87524 ORDER BY total_value DESC;

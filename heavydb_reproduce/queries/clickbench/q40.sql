@@ -1,0 +1,1 @@
+SELECT URLHash, CAST(EventTime/86400 AS INTEGER) AS day_bucket, COUNT(*) AS PageViews FROM t WHERE CounterID = 62 AND EventTime >= 1372636800 AND EventTime <= 1375315199 AND IsRefresh = 0 AND TraficSourceID IN (-1, 6) AND RefererHash = 3594120000172545465 GROUP BY URLHash, day_bucket ORDER BY PageViews DESC LIMIT 10 OFFSET 100;

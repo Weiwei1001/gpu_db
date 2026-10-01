@@ -1,0 +1,7 @@
+suite,query,db,ok,exec_ms,wall_s,error
+clickbench_approx,q4,cb_sf1,True,263.0,0.55,
+clickbench_approx,q8,cb_sf1,True,308.0,0.59,
+clickbench_approx,q9,cb_sf1,True,358.0,0.65,
+clickbench_approx,q10,cb_sf1,True,255.0,0.55,
+clickbench_approx,q11,cb_sf1,True,268.0,0.55,
+clickbench_approx,q13,cb_sf1,True,308.0,0.6,

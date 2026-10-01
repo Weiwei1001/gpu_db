@@ -1,0 +1,1 @@
+SELECT WindowClientWidth, WindowClientHeight, COUNT(*) AS PageViews FROM t WHERE CounterID = 62 AND EventTime >= 1372636800 AND EventTime <= 1375315199 AND IsRefresh = 0 AND DontCountHits = 0 AND URLHash = 2868770270353813622 GROUP BY WindowClientWidth, WindowClientHeight ORDER BY PageViews DESC LIMIT 10 OFFSET 10000;

@@ -1,0 +1,1 @@
+SELECT COUNT(*) FROM t WHERE URL LIKE '%google%';
