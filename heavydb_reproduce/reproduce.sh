@@ -36,11 +36,12 @@ while [ $# -gt 0 ]; do case "$1" in
   -h|--help) sed -n '2,25p' "$0"; exit 0;; *) echo "未知参数 $1"; exit 2;; esac; done
 [ -n "$GPU" ] || { echo "必须指定 --gpu N"; exit 2; }
 export HB_MODE HEAVYDB_HOME DEPS_PREFIX GPU
-export HB_RESULTS_BASE="$HB_ROOT/results/$HB_MODE"     # smoke / full 各自一个结果目录
+GPU_SLUG=$(nvidia-smi -i "$GPU" --query-gpu=name --format=csv,noheader | sed 's/^NVIDIA //I; s/[^A-Za-z0-9]\+/-/g; s/-$//' | tr 'A-Z' 'a-z')
+export GPU_SLUG HB_RESULTS_BASE="$HB_ROOT/results/$HB_MODE/$GPU_SLUG"   # 按 模式/GPU 型号 分目录：results/full/h100-80gb-hbm3
 mkdir -p "$HB_RESULTS_BASE" "$HB_ROOT/logs"
 log(){ echo "[$(date +%T)] $*"; }
 has(){ [[ " $STAGES " == *" $1 "* ]]; }
-log "模式=$HB_MODE  GPU=$GPU  heavydb=$HEAVYDB_HOME  数据=${HB_DATA_DIR:-$HEAVYDB_HOME/build/data}  阶段=$STAGES"
+log "模式=$HB_MODE  GPU=$GPU ($GPU_SLUG)  heavydb=$HEAVYDB_HOME  数据=${HB_DATA_DIR:-$HEAVYDB_HOME/build/data}  阶段=$STAGES"
 IMPORT_PATHS="[\"$HB_ROOT\"${HB_DATA_DIR:+,\"$HB_DATA_DIR\"}]"
 
 # ---------- Python 环境 ----------
