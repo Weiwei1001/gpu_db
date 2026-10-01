@@ -12,7 +12,7 @@
 #   ./run_full.sh --dry-run                        # 只打印选中的 GPU、磁盘、找到的数据，不构建不运行
 #
 # 选项：
-#   --gpu N            指定卡；不给则自动选：只有一张卡就用它，多张卡取第一张没有任何进程的
+#   --gpu N            指定卡；不给则自动选：只有一张卡就用它，多张卡取没有任何进程的卡里显存最大的
 #   --data-roots A:B   现成数据的搜索根（别人跑 gpu_db 留下的 tests/ 目录、csv-*/、*.duckdb、hits.parquet）
 #                      默认自动查：--data-dir、~/gpu_db、本包同级的 gpu_db
 #   --data-dir DIR     HeavyDB 库与临时文件目录（全量约 70 GB；默认本包下 data/，空间不够会提示）
@@ -35,10 +35,12 @@ if [ -z "$GPU" ]; then
   if [ "$NGPU" -eq 1 ]; then GPU=0
   else
     BUSY=$(nvidia-smi --query-compute-apps=gpu_uuid --format=csv,noheader | sort -u)
-    for i in $(nvidia-smi --query-gpu=index --format=csv,noheader); do
-      u=$(nvidia-smi -i "$i" --query-gpu=uuid --format=csv,noheader)
-      grep -q "$u" <<< "$BUSY" || { GPU=$i; break; }
-    done
+    best_mem=-1
+    while IFS=, read -r i u mem; do          # 空闲卡里取显存最大的（避免选中小的显示卡）
+      i=${i// /}; u=${u// /}; mem=${mem// /}
+      grep -q "$u" <<< "$BUSY" && continue
+      [ "$mem" -gt "$best_mem" ] && { GPU=$i; best_mem=$mem; }
+    done < <(nvidia-smi --query-gpu=index,uuid,memory.total --format=csv,noheader,nounits)
     [ -n "$GPU" ] || { log "!! $NGPU 张卡都有进程在跑，用 --gpu N 指定（或等空闲）"; exit 1; }
   fi
 fi
