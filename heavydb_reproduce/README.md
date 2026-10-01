@@ -3,15 +3,18 @@
 对齐 `gpu_db` 论文 harness 的三类实验（Category A / B / C），在 HeavyDB 上跑
 TPC-H、H2O、ClickBench、case_bench 四个 benchmark，**单卡**测量。
 
-**Quick start (one command, fresh Ubuntu machine with an NVIDIA GPU and sudo):**
+**Quick start (one command). If you already ran the Maximus/Sirius benchmarks from this repo, run it inside that checkout so the existing `tests/` data is reused:**
 
 ```bash
-git clone -b heavydb-reproduce https://github.com/Weiwei1001/gpu_db.git && gpu_db/heavydb_reproduce/run_full.sh
+git pull && heavydb_reproduce/run_full.sh
 ```
 
-It picks an idle GPU, builds HeavyDB, prepares the data (about 70 GB), and runs Category A, B, and C-lite.
-About 5.5 h on one H100. Results land in `gpu_db/heavydb_reproduce/results/full/`. Add `--data-dir /bigdisk/x`
-if the root disk is small, and `--catc-scope ab` for the full 4–5 day Category C grid.
+On a fresh machine: `git clone https://github.com/Weiwei1001/gpu_db.git && gpu_db/heavydb_reproduce/run_full.sh`.
+
+It picks an idle GPU, builds HeavyDB, imports the data (generates or downloads whatever is missing, about 70 GB),
+and runs Category A, B, and C-lite. About 5.5 h on one H100 when the data is already there. Results land in
+`heavydb_reproduce/results/full/`. `--dry-run` shows the chosen GPU and the data it found without building anything;
+`--data-dir /bigdisk/x` if the root disk is small; `--catc-scope ab` for the full 4–5 day Category C grid.
 
 ```bash
 ./run_full.sh                                  # 一键全量：自动选空闲 GPU、自动找现成数据、构建、Cat A/B + C lite（默认）
