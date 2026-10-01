@@ -13,7 +13,7 @@ On a fresh machine: `git clone https://github.com/Weiwei1001/gpu_db.git && gpu_d
 
 It picks an idle GPU, builds HeavyDB, imports the data (generates or downloads whatever is missing, about 70 GB),
 and runs Category A, B, and C-lite. About 5.5 h on one H100 when the data is already there. Results land in
-`heavydb_reproduce/results/full/`. `--dry-run` shows the chosen GPU and the data it found without building anything;
+`heavydb_reproduce/results/full/<gpu-model>/` (one directory per GPU model, so A100 and H100 runs do not mix). `--dry-run` shows the chosen GPU and the data it found without building anything;
 `--data-dir /bigdisk/x` if the root disk is small; `--catc-scope ab` for the full 4–5 day Category C grid.
 
 ```bash
@@ -32,7 +32,7 @@ HB_SFS_TPCH="1 10" HB_SFS_H2O="1 4" HB_SFS_CB="1 10" ./reproduce.sh --gpu 4 --fu
 | # | 脚本 | 做什么 |
 |---|---|---|
 | 1 | `stages/01_build.sh` | apt 依赖 + 源码构建 Thrift/Arrow/CPR/H3 → `/usr/local/mapd-deps`，克隆 heavydb `b348f14`，gcc-11 + CUDA 编译，`initheavy`。含官方文档没写的 4 处上游坑的绕法（预编译依赖站点已死、缺 `LICENSE.md`、GEOS C++ 头、PROJ/GDAL 数据路径） |
-| 2 | `stages/02_data.sh` | **先找现成数据，再生成**（见下）。全部经 Parquet 导入，列类型按 `schemas/*.sql` 强制转换；来源记入 `results/full/data_sources.csv` |
+| 2 | `stages/02_data.sh` | **先找现成数据，再生成**（见下）。全部经 Parquet 导入，列类型按 `schemas/*.sql` 强制转换；来源记入 `results/full/<gpu型号>/data_sources.csv` |
 | 3 | `stages/03_cat_a.sh` | **Category A**：数据常驻 GPU。每条 query 预热后 3 次延迟 + 100 ms 粒度功率采样（NVML 能量计数器 ΔE/Δt）；短 query 放大到 ≥2 s 窗口 |
 | 4 | `stages/04_cat_b.sh` | **Category B**：数据在 CPU 内存、每次含 PCIe 传输（每条前 `\clear_gpu`），计时 + 能耗 |
 | 5 | `stages/05_cat_c.sh` | **Category C**：5 功率档 × 5 SM 时钟网格，**每个网格点重跑一遍阶段 3（和 4）**，对齐 repo 的 `run_energy_sweep.py`。需 passwordless `sudo nvidia-smi`；断点续跑（完成的网格点留 `.done`）；无论怎么退出都恢复默认功率/时钟 |
@@ -64,7 +64,7 @@ repo 的 ClickBench CSV 把 `EventTime`/`EventDate` 转成了时间戳，导入�
 启动参数与实测 CUDA context 都只在 `--gpu` 那张卡上、功率上限为默认值（Cat C 网格点上则核对为该档功率与 SM 时钟）。
 任何一项不符立即中止并保留已测数据；每行结果带 `gpu_checked` 列。
 
-**结果目录**：`results/<smoke|full>/`（两种模式分开，query 筛查也在各自模式的数据上做）
+**结果目录**：`results/<smoke|full>/<gpu型号>/`（例如 `results/full/a100-sxm4-80gb/`；模式和 GPU 型号都分开，query 筛查也在各自目录下做）
 - `catA_powersample.csv`、`catB_timing.csv`、`catB_energy.csv`、`traces/`
 - Cat C：`catC/pl<W>_sm<MHz>/` 每个网格点一份，汇总 `catC_A.csv`、`catC_B_timing.csv`、`catC_B_energy.csv`（带 `pl_w`/`sm_mhz`）；lite 为 `catC_grid.csv`
 

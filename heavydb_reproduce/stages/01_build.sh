@@ -89,9 +89,20 @@ git checkout -q "${HEAVYDB_COMMIT:-b348f14}"
 [ -f LICENSE.md ] || cp LICENSE.txt LICENSE.md          # 上游坑 #2：CMake 要 LICENSE.md
 
 # ---------- 7. 配置 + 编译 ----------
+# ENABLE_ONLY_ONE_ARCH 只生成一种架构的 PTX：cmake 在配置时探测它看到的第一块卡。
+# 所以配置时用 CUDA_VISIBLE_DEVICES 锁定目标卡（$GPU），并把探测到的架构记下来；
+# 下次目标卡架构不同（例如先 A100 后 H100）就重新配置+编译。
+WANT_CC=$(nvidia-smi -i "${GPU:-0}" --query-gpu=compute_cap --format=csv,noheader | tr -d '. ')
+HAVE_CC=$(cat "$HEAVYDB_HOME/build/NvidiaComputeCapability.txt" 2>/dev/null | tr -d ' ' || true)
+if [ -x "$HEAVYDB_HOME/build/bin/heavydb" ] && [ -n "$HAVE_CC" ] && [ "$HAVE_CC" != "$WANT_CC" ]; then
+  log "已有二进制是 compute_$HAVE_CC，目标 GPU $GPU 是 compute_$WANT_CC：重新编译"
+  rm -f "$HEAVYDB_HOME/build/bin/heavydb" "$HEAVYDB_HOME/build/NvidiaComputeCapability.txt"
+fi
 if [ ! -x "$HEAVYDB_HOME/build/bin/heavydb" ]; then
-  log "cmake 配置（gcc-11, CUDA, 单架构）"
+  log "cmake 配置（gcc-11, CUDA, 单架构 compute_$WANT_CC，探测锁定 GPU ${GPU:-0}）"
   mkdir -p build && cd build && rm -f CMakeCache.txt        # 上次失败的缓存会带坏本次配置
+  rm -rf NvidiaComputeCapability NvidiaComputeCapability.txt   # 旧的探测结果会被直接复用
+  CUDA_VISIBLE_DEVICES="${GPU:-0}" \
   cmake -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_C_COMPILER=/usr/bin/gcc-11 -DCMAKE_CXX_COMPILER=/usr/bin/g++-11 \
     -DCMAKE_CUDA_COMPILER="$CUDA_HOME/bin/nvcc" -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-11 \
@@ -101,7 +112,9 @@ if [ ! -x "$HEAVYDB_HOME/build/bin/heavydb" ]; then
     -DENABLE_TESTS=off -DENABLE_GEOS=ON -DENABLE_IMPORT_PARQUET=ON .. > "$HB_ROOT/logs/cmake.log" 2>&1
   log "编译（约 30 分钟，$JOBS 线程）"
   make -j"$JOBS" > "$HB_ROOT/logs/make.log" 2>&1
-else log "heavydb 二进制已存在，跳过编译"; cd "$HEAVYDB_HOME/build"; fi
+  GOT_CC=$(cat NvidiaComputeCapability.txt 2>/dev/null | tr -d ' ' || true)
+  [ "$GOT_CC" = "$WANT_CC" ] || log "!! 注意：cmake 探测到 compute_${GOT_CC:-?}，目标卡是 compute_$WANT_CC（见 logs/cmake.log）"
+else log "heavydb 二进制已存在（compute_$HAVE_CC），跳过编译"; cd "$HEAVYDB_HOME/build"; fi
 
 # ---------- 8. 上游坑 #4：PROJ/GDAL 数据文件 ----------
 mkdir -p ThirdParty
