@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""HeavyDB benchmark 公用件：持久 heavysql 会话 + NVML 能量计数器。"""
+"""Shared pieces for the HeavyDB benchmark: persistent heavysql session + NVML energy counter."""
 import ctypes, os, queue, re, subprocess, threading, time
 import statistics as st
 
@@ -7,8 +7,8 @@ HB_ROOT = os.environ.get("HB_ROOT", os.path.dirname(os.path.dirname(os.path.absp
 BUILD = os.path.join(os.environ.get("HEAVYDB_HOME", os.path.join(HB_ROOT, "heavydb")), "build")
 DEPS = os.environ.get("DEPS_PREFIX", "/usr/local/mapd-deps")
 def _server_gpus():
-    """从 heavydb 进程参数推断它用了哪些 GPU —— 采样卡必须和服务端一致，
-    否则会出现"在 A 卡采样、B 卡执行"的静默错误（曾因此报废一整批数据）。"""
+    """Infer which GPUs heavydb uses from its process arguments -- the sampled GPU must match the server,
+    otherwise you get the silent "sample on GPU A, execute on GPU B" error (it once ruined a whole batch of data)."""
     try:
         cmd = subprocess.run(["pgrep", "-a", "-x", "heavydb"],
                              capture_output=True, text=True).stdout.split("\n")[0]
@@ -34,7 +34,7 @@ def _handle(i):
 HS = [_handle(g) for g in GPUS]
 
 def energy_J():
-    """两张卡累计能量之和（J），来自硬件能量计数器。"""
+    """Accumulated energy (J) summed over the GPUs, from the hardware energy counter."""
     tot = 0
     for h in HS:
         v = ctypes.c_ulonglong()
@@ -51,7 +51,7 @@ def power_W():
     return tot / 1000.0
 
 def idle_baseline_W(seconds=4.0):
-    """空载功率：能量计数器 ΔE/Δt，窗口 >=4s。"""
+    """Idle power: energy counter ΔE/Δt over a window >= 4 s."""
     e0, t0 = energy_J(), time.perf_counter()
     time.sleep(seconds)
     e1, t1 = energy_J(), time.perf_counter()
@@ -59,13 +59,14 @@ def idle_baseline_W(seconds=4.0):
 
 # ---------------- heavysql ----------------
 class Sql:
-    """持久 heavysql 会话。
+    """Persistent heavysql session.
 
-    输出顺序是 [结果行...] ["N rows returned."] ["Execution time: X ms, ..."]，
-    每条 query 后面跟一条单独成行的哨兵 SELECT（HeavyDB 不允许一次请求多条语句），
-    用哨兵回显判定前一条到底跑完没有 —— HeavyDB 有一批错误信息不含 "Error" 字样。
-    读取走后台线程 + 队列：stdout 是行缓冲的文本流，select() 看不到已经进了
-    Python 缓冲区的数据，会假死。
+    Output order is [result rows...] ["N rows returned."] ["Execution time: X ms, ..."];
+    each query is followed by a sentinel SELECT on its own line (HeavyDB does not allow several
+    statements in one request), and the sentinel echo tells us whether the previous statement
+    actually finished -- a number of HeavyDB error messages do not contain the word "Error".
+    Reading goes through a background thread + queue: stdout is a line-buffered text stream, and
+    select() cannot see data already sitting in Python's buffer, so it would hang.
     """
     _seq = 0
     TIMING = re.compile(r"Execution time: ([\d.]+) ms")
@@ -93,10 +94,11 @@ class Sql:
         self.p.stdin.write(s + "\n"); self.p.stdin.flush()
 
     def _get(self, deadline):
-        """取一行；超时返回 ""；服务端死了返回 None。
+        """Fetch one line; returns "" on timeout; returns None if the server died.
 
-        HeavyDB 崩溃时 heavysql 不会退出、也不吐任何东西，只靠超时会白等到
-        timeout 上限，所以没数据时每 2 秒探一次服务端进程。
+        When HeavyDB crashes, heavysql neither exits nor prints anything, so relying on the
+        timeout alone would wait uselessly until the limit; instead, when no data arrives,
+        probe the server process every 2 seconds.
         """
         while True:
             left = deadline - time.time()
@@ -121,15 +123,15 @@ class Sql:
         while True:
             line = self._get(deadline)
             if line == "":
-                raise TimeoutError(f"{timeout}s 超时")
+                raise TimeoutError(f"{timeout}s timeout")
             if line is None:
-                raise RuntimeError("服务端已退出")
+                raise RuntimeError("server has exited")
             m = self.TIMING.search(line)
             if m:
-                if seen_token:                      # 哨兵自己的 timing —— 收尾
+                if seen_token:                      # the sentinel's own timing -- wrap up
                     if got == want:
                         return total
-                    msg = next((l.strip() for l in reversed(noise) if l.strip()), "未知错误")
+                    msg = next((l.strip() for l in reversed(noise) if l.strip()), "unknown error")
                     raise RuntimeError(msg[:200])
                 if got < want:
                     total += float(m.group(1)); got += 1
@@ -142,7 +144,7 @@ class Sql:
                 noise.append(line)
 
     def rows_returned(self, sql, timeout=900):
-        """跑一次，返回结果行数（heavysql 会打印 "N rows returned."）。"""
+        """Run once and return the number of result rows (heavysql prints "N rows returned.")."""
         stmts = [x.strip() for x in sql.strip().split(";") if x.strip()]
         Sql._seq += 1
         token = f"HBROWS{Sql._seq}"
@@ -153,9 +155,9 @@ class Sql:
         while True:
             line = self._get(deadline)
             if line == "":
-                raise TimeoutError(f"{timeout}s 超时")
+                raise TimeoutError(f"{timeout}s timeout")
             if line is None:
-                raise RuntimeError("服务端已退出")
+                raise RuntimeError("server has exited")
             m = re.match(r"(\d+) rows returned", line.strip())
             if m and n is None:
                 n = int(m.group(1))
@@ -168,16 +170,17 @@ class Sql:
 
     @staticmethod
     def count_wrap(sql):
-        """包一层 COUNT(*)：内层扫描/聚合照做，但不把海量结果集传回客户端。"""
+        """Wrap in COUNT(*): the inner scan/aggregation still runs, but the huge result set is not sent back to the client."""
         stmts = [x.strip() for x in sql.strip().split(";") if x.strip()]
         stmts[-1] = f"SELECT COUNT(*) FROM ({stmts[-1]}) AS _hb_wrap"
         return "; ".join(stmts) + ";"
 
     def run_burst(self, sql, k, timeout=1800):
-        """把同一条 query 连发 k 次（不逐条等回包），返回 (每次 exec_ms 列表, 墙钟秒)。
+        """Send the same query k times back to back (without waiting for each reply); returns (list of per-run exec_ms, wall-clock seconds).
 
-        放大法要求窗口里基本都在执行 query；逐条 run() 每次都要一个客户端往返，
-        短 query 上空隙能占到窗口的一大半，会把 E/K 稀释掉。
+        Amplification requires the window to be spent almost entirely executing the query; a per-query run()
+        costs a client round trip each time, and on short queries the gaps can take up most of the window,
+        diluting E/K.
         """
         stmts = [x.strip() for x in sql.strip().split(";") if x.strip()]
         Sql._seq += 1
@@ -193,9 +196,9 @@ class Sql:
         while True:
             line = self._get(deadline)
             if line == "":
-                raise TimeoutError(f"{timeout}s 超时")
+                raise TimeoutError(f"{timeout}s timeout")
             if line is None:
-                raise RuntimeError("服务端已退出")
+                raise RuntimeError("server has exited")
             m = self.TIMING.search(line)
             if m:
                 if seen_token:
@@ -206,7 +209,7 @@ class Sql:
                 seen_token = True
         t1 = time.perf_counter()
         if len(ms) < want:
-            raise RuntimeError(f"burst 只回了 {len(ms)}/{want} 条计时")
+            raise RuntimeError(f"burst returned only {len(ms)}/{want} timings")
         return ms, t1 - t0
 
     def cmd(self, c):
@@ -218,21 +221,21 @@ class Sql:
         except Exception:
             self.p.kill()
 
-# ---------------- 服务端存活/重启 ----------------
+# ---------------- Server liveness / restart ----------------
 def server_alive():
     return bool(subprocess.run(["pgrep", "-x", "heavydb"],
                                capture_output=True, text=True).stdout.strip())
 
-# ---------------- 逐 query 配置检查 ----------------
+# ---------------- Per-query configuration check ----------------
 class ConfigError(RuntimeError):
-    """服务端配置与测量口径不一致：必须中止，不能续跑。"""
+    """Server configuration does not match the measurement setup: must abort, must not continue."""
 
 def _heavydb_pids():
     return subprocess.run(["pgrep", "-x", "heavydb"],
                           capture_output=True, text=True).stdout.split()
 
 def _gpus_of_pid(pid):
-    """该进程在哪几块卡上有 CUDA context（nvidia-smi 实测，不信启动参数）。"""
+    """Which GPUs this process has a CUDA context on (measured via nvidia-smi, not trusting the start-up arguments)."""
     idx = {}
     for line in subprocess.run(["nvidia-smi", "--query-gpu=index,uuid", "--format=csv,noheader"],
                                capture_output=True, text=True).stdout.strip().splitlines():
@@ -249,44 +252,44 @@ def _args_of_pid(pid):
     return get("--start-gpu"), get("--num-gpus")
 
 class Guard:
-    """每条 query 前后调用 check()。检查：
-    1. 只有一个 heavydb 进程，且 PID 没变（没被悄悄重启过）；
-    2. 启动参数 --start-gpu/--num-gpus 与 GPUS 一致；
-    3. nvidia-smi 实测该进程只在 GPUS 上有 context —— 能耗采样的卡 == 执行的卡；
-    4. 功率上限 / SM 时钟：设了 HB_EXPECT_PL / HB_EXPECT_SM（Cat C 网格点）就核对为该档，
-       没设就要求功率上限为默认值（Cat A/B 不能在 Cat C 残留的设置下跑）。
+    """Call check() before and after every query. It checks:
+    1. exactly one heavydb process, and its PID has not changed (no silent restart);
+    2. the start-up arguments --start-gpu/--num-gpus match GPUS;
+    3. nvidia-smi shows the process has a context only on GPUS -- the GPU sampled for energy == the GPU executing;
+    4. power limit / SM clock: if HB_EXPECT_PL / HB_EXPECT_SM are set (Cat C grid point), verify against that level;
+       otherwise require the power limit to be the default (Cat A/B must not run under leftover Cat C settings).
     """
     def __init__(self):
         self.pid = None
         self.rebind()
 
     def rebind(self):
-        """初次启动或受控重启之后，认下新的 PID 并立即检查。"""
+        """After the initial start or a controlled restart, adopt the new PID and check immediately."""
         pids = _heavydb_pids()
         if len(pids) != 1:
-            raise ConfigError(f"heavydb 进程数 {len(pids)}，应为 1")
+            raise ConfigError(f"{len(pids)} heavydb processes, expected 1")
         self.pid = pids[0]
         self.check("rebind")
 
     def check(self, where=""):
         pids = _heavydb_pids()
         if pids != [self.pid]:
-            raise ConfigError(f"[{where}] heavydb PID {self.pid} -> {pids}（被重启或多开）")
+            raise ConfigError(f"[{where}] heavydb PID {self.pid} -> {pids} (restarted or multiple instances)")
         start, num = _args_of_pid(self.pid)
         if (start, num) != (GPUS[0], len(GPUS)):
-            raise ConfigError(f"[{where}] 启动参数 start_gpu={start} num_gpus={num}，"
-                              f"应为 start_gpu={GPUS[0]} num_gpus={len(GPUS)}")
+            raise ConfigError(f"[{where}] start-up arguments start_gpu={start} num_gpus={num}, "
+                              f"expected start_gpu={GPUS[0]} num_gpus={len(GPUS)}")
         real = _gpus_of_pid(self.pid)
         if real != sorted(GPUS):
-            raise ConfigError(f"[{where}] heavydb 实际在 GPU {real} 上，能耗采的是 GPU {GPUS}")
+            raise ConfigError(f"[{where}] heavydb is actually on GPU {real}, but energy is sampled on GPU {GPUS}")
         others = _others_on_gpus(self.pid)
         if others and os.environ.get("HB_IGNORE_BUSY", "0") != "1":
-            raise ConfigError(f"[{where}] GPU {GPUS} 上出现了别的进程 {others}（能耗会被污染；HB_IGNORE_BUSY=1 可忽略）")
+            raise ConfigError(f"[{where}] other processes {others} appeared on GPU {GPUS} (energy would be contaminated; HB_IGNORE_BUSY=1 ignores this)")
         check_power_clock(where)
         return ",".join(map(str, real))
 
 def _others_on_gpus(my_pid):
-    """目标卡上除本 heavydb 之外的进程 [(pid, MiB)]。"""
+    """Processes on the target GPUs other than our heavydb, as [(pid, MiB)]."""
     idx = {}
     for line in subprocess.run(["nvidia-smi", "--query-gpu=index,uuid", "--format=csv,noheader"],
                                capture_output=True, text=True).stdout.strip().splitlines():
@@ -302,26 +305,26 @@ def _others_on_gpus(my_pid):
     return res
 
 def check_power_clock(where=""):
-    """每次都重新读环境变量：run_catc.py 在进程内切档后会更新它们。"""
+    """Re-read the environment variables every time: run_catc.py updates them after switching levels within the process."""
     q = subprocess.run(["nvidia-smi", "-i", str(GPUS[0]),
                         "--query-gpu=power.limit,power.default_limit,clocks.sm",
                         "--format=csv,noheader,nounits"], capture_output=True, text=True).stdout
     pl, dpl, sm = [float(v) for v in q.split(",")]
     want_pl = float(os.environ.get("HB_EXPECT_PL") or dpl)
     if abs(pl - want_pl) > 1:
-        raise ConfigError(f"[{where}] GPU {GPUS[0]} 功率上限 {pl:.0f} W，应为 {want_pl:.0f} W")
+        raise ConfigError(f"[{where}] GPU {GPUS[0]} power limit {pl:.0f} W, expected {want_pl:.0f} W")
     want_sm = os.environ.get("HB_EXPECT_SM")
     if want_sm and sm > float(want_sm) + 20:
-        raise ConfigError(f"[{where}] GPU {GPUS[0]} SM 时钟 {sm:.0f} MHz，高于锁定的 {want_sm} MHz")
+        raise ConfigError(f"[{where}] GPU {GPUS[0]} SM clock {sm:.0f} MHz, above the locked {want_sm} MHz")
 
-# 结果按模式分目录（smoke / full 不混在一起），query 筛查也在各自模式的数据上做
+# Results go in one directory per mode (smoke / full are not mixed); query screening is also done on each mode's own data
 RESULTS_BASE = os.environ.get("HB_RESULTS_BASE") or os.path.join(HB_ROOT, "results", os.environ.get("HB_MODE", "smoke"))
 
 IMPORT_PATHS = "[" + ",".join(f'"{p}"' for p in [HB_ROOT, os.environ.get("HB_DATA_DIR")] if p) + "]"
 
 def restart_server(num_gpus=None, start_gpu=None, wait_s=120):
-    """HeavyDB 会被某些 query 直接打挂（如 CUDA_ERROR_MISALIGNED_ADDRESS），重启续跑。
-    卡数/起始卡默认取 GPUS，保证与能耗采样的卡一致（曾因默认双卡污染整批数据）。"""
+    """Some queries crash HeavyDB outright (e.g. CUDA_ERROR_MISALIGNED_ADDRESS); restart and continue.
+    GPU count / start GPU default to GPUS so they match the GPU sampled for energy (the old two-GPU default once contaminated a whole batch of data)."""
     num_gpus = len(GPUS) if num_gpus is None else num_gpus
     start_gpu = GPUS[0] if start_gpu is None else start_gpu
     subprocess.run(["pkill", "-9", "-x", "heavydb"], capture_output=True)
@@ -341,9 +344,9 @@ def restart_server(num_gpus=None, start_gpu=None, wait_s=120):
             pass
     return False
 
-# ---------------- 占用守卫 ----------------
+# ---------------- Busy guard ----------------
 def gpu_guard():
-    """确认 GPU 4/5 上除了我们的 heavydb 没有别人的大任务；返回 (ok, 说明)。"""
+    """Confirm that no one else's large job is on GPU 4/5 besides our heavydb; returns (ok, details)."""
     out = subprocess.run(["nvidia-smi", "--query-compute-apps=pid,gpu_uuid,used_memory",
                           "--format=csv,noheader,nounits"], capture_output=True, text=True).stdout
     uuid = subprocess.run(["nvidia-smi", "-i", ",".join(map(str, GPUS)),
