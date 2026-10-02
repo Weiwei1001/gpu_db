@@ -12,9 +12,17 @@ DL="$HB_ROOT/deps-src"; mkdir -p "$DL"
 log(){ echo "[$(date +%T)] [build] $*"; }
 
 # ---------- 1. apt ----------
-log "apt 依赖"
-sudo apt-get update -qq
-sudo apt-get install -y --no-install-recommends \
+# Everything apt says goes to logs/apt.log. On failure we print the lines that name the
+# package whose configure step failed: "dpkg returned an error code (1)" alone never says which.
+APT_LOG="$HB_ROOT/logs/apt.log"; : > "$APT_LOG"
+export DEBIAN_FRONTEND=noninteractive
+log "apt dependencies (log: $APT_LOG)"
+# A package left half-configured by an earlier install on this machine makes every later
+# apt-get install fail with a "followup error". Finish or repair that first.
+sudo dpkg --configure -a >> "$APT_LOG" 2>&1 || log "!! dpkg --configure -a reported errors (see $APT_LOG); trying apt-get -f install"
+sudo apt-get -f install -y >> "$APT_LOG" 2>&1 || true
+sudo apt-get update -qq >> "$APT_LOG" 2>&1 || log "!! apt-get update reported errors (see $APT_LOG); continuing"
+if ! sudo apt-get install -y --no-install-recommends \
   gcc-11 g++-11 cmake ninja-build bison flex maven openjdk-21-jdk-headless \
   llvm-14-dev clang-14 libclang-14-dev libboost-all-dev \
   libgdal-dev gdal-data libproj-dev proj-data libgeos-dev libgeos++-dev \
@@ -23,7 +31,12 @@ sudo apt-get install -y --no-install-recommends \
   libdouble-conversion-dev libevent-dev libunwind-dev libxerces-c-dev \
   libpng-dev libjpeg-dev libtiff-dev libgif-dev libwebp-dev \
   libncurses-dev libsqlite3-dev librdkafka-dev liburiparser-dev libpcre2-dev \
-  python3-venv python3-pip curl git ca-certificates >/dev/null
+  python3-venv python3-pip curl git ca-certificates >> "$APT_LOG" 2>&1; then
+  log "!! apt-get install failed. Lines naming the failing package(s):"
+  grep -nE "dpkg: error|dpkg: dependency problems|Errors were encountered|^E: |not installable|has no installation candidate" -A2 "$APT_LOG" | head -40
+  log "!! Full log: $APT_LOG  (Ubuntu $(. /etc/os-release && echo "$VERSION_ID"); the package list targets 22.04/24.04)"
+  exit 1
+fi
 sudo mkdir -p "$DEPS_PREFIX"
 
 fetch(){ [ -f "$DL/$2" ] || curl -sSL --retry 3 -o "$DL/$2" "$1"; }
