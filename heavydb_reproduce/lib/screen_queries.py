@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""方言筛查：把 75 条 query 在 HeavyDB 上各跑一遍，记录 pass/fail + 错误原因。"""
+"""Dialect screening: run each of the 75 queries once on HeavyDB and record pass/fail + the error reason."""
 import csv, os, re, subprocess, sys, time
 
 import os as _os
@@ -7,7 +7,7 @@ HB_ROOT = _os.environ.get("HB_ROOT", _os.path.dirname(_os.path.dirname(_os.path.
 HSQL = _os.path.join(HB_ROOT, "lib", "hsql")
 QDIR = _os.path.join(HB_ROOT, "queries")
 SUITES = _os.environ.get("HB_SCREEN_DBS") and dict(
-    kv.split("=") for kv in _os.environ["HB_SCREEN_DBS"].split(",")) or {  # suite -> (库, query 目录)
+    kv.split("=") for kv in _os.environ["HB_SCREEN_DBS"].split(",")) or {  # suite -> (database, query directory)
     "tpch":       "tpch_sf1",
     "h2o":        "h2o_1gb",
     "clickbench": "cb_sf10",
@@ -29,7 +29,7 @@ rows = []
 for suite, db in [(k, v) for k, v in SUITES.items() if k in only]:
     d = os.path.join(QDIR, suite)
     files = sorted(os.listdir(d), key=qsort)
-    print(f"\n===== {suite}  ({db})  {len(files)} 条 =====")
+    print(f"\n===== {suite}  ({db})  {len(files)} queries =====")
     for fn in files:
         sql = open(os.path.join(d, fn)).read()
         t0 = time.time()
@@ -45,7 +45,7 @@ for suite, db in [(k, v) for k, v in SUITES.items() if k in only]:
         if not ok:
             cand = [l.strip() for l in out.splitlines()
                     if l.strip() and "Execution time" not in l and "Total time" not in l]
-            errline = next((l for l in cand if ERR_PAT.search(l)), cand[-1] if cand else "无输出")
+            errline = next((l for l in cand if ERR_PAT.search(l)), cand[-1] if cand else "no output")
         rows.append(dict(suite=suite, query=fn[:-4], db=db, ok=ok,
                          exec_ms=round(sum(ms), 2) if ms else "",
                          wall_s=round(wall, 2), error=(errline or "")[:200]))
@@ -57,11 +57,11 @@ with open(out_csv, "w", newline="") as f:
     w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
     w.writeheader(); w.writerows(rows)
 
-print("\n===== 汇总 =====")
+print("\n===== Summary =====")
 for suite in only:
     r = [x for x in rows if x["suite"] == suite]
     ok = sum(1 for x in r if x["ok"])
-    print(f"  {suite:11s} {ok}/{len(r)} 可跑")
+    print(f"  {suite:11s} {ok}/{len(r)} runnable")
     for x in r:
         if not x["ok"]:
             print(f"      {x['query']}: {x['error'][:110]}")

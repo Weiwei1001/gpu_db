@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Category C：功率上限 × SM 时钟 的二维能耗网格（对齐 repo 的 5×5）。
+"""Category C: two-dimensional energy grid of power limit × SM clock (matching the repo's 5×5).
 
-repo 的 run_energy_sweep.py 在运行时按硬件解析档位：
-  功率 = [power.min_limit .. TDP] 均分 5 档
-  SM   = [最低支持时钟 .. 最高支持时钟] 均分 5 档（吸附到实际支持的档位）
+The repo's run_energy_sweep.py derives the levels from the hardware at run time:
+  power = [power.min_limit .. TDP] evenly split into 5 levels
+  SM    = [lowest supported clock .. highest supported clock] evenly split into 5 levels (snapped to actually supported clocks)
 """
 import argparse, atexit, csv, math, os, subprocess, sys, time
 import statistics as st
@@ -19,7 +19,7 @@ def restore():
     os.environ.pop("HB_EXPECT_PL", None); os.environ.pop("HB_EXPECT_SM", None)
     sh("sudo", "nvidia-smi", "-i", GPUSTR, "-rgc")
     sh("sudo", "nvidia-smi", "-i", GPUSTR, "-pl", str(TDP))
-    print(f"[restore] PL={TDP}W，时钟解锁", flush=True)
+    print(f"[restore] PL={TDP}W, clocks unlocked", flush=True)
 
 def levels(lo, hi, n, snap=None):
     if n <= 1:
@@ -31,7 +31,7 @@ def levels(lo, hi, n, snap=None):
     return vs
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--targets", required=True, help="suite:db:sf:q1,q2,... 分号分隔")
+ap.add_argument("--targets", required=True, help="suite:db:sf:q1,q2,... separated by semicolons")
 ap.add_argument("--n-pl", type=int, default=5)
 ap.add_argument("--n-sm", type=int, default=5)
 ap.add_argument("--trials", type=int, default=3)
@@ -49,7 +49,7 @@ sup = sorted({int(x) for x in sh("nvidia-smi", "-i", g0, "--query-supported-cloc
               if x.isdigit()})
 PLS = levels(PLMIN, TDP, a.n_pl)
 SMS = levels(sup[0], sup[-1], a.n_sm, snap=sup)
-print(f"GPU {hb.GPUS}  功率档 {PLS}  SM 档 {SMS}  = {len(PLS)*len(SMS)} 个配置", flush=True)
+print(f"GPU {hb.GPUS}  power levels {PLS}  SM levels {SMS}  = {len(PLS)*len(SMS)} configurations", flush=True)
 
 targets = []
 for t in a.targets.split(";"):
@@ -57,10 +57,10 @@ for t in a.targets.split(";"):
     allq = dict(hb.queries(suite))
     for qn in qs.split(","):
         targets.append((suite, db, sf, qn, allq[qn]))
-print(f"目标 query {len(targets)} 条 → 共 {len(PLS)*len(SMS)*len(targets)} 次测量", flush=True)
+print(f"{len(targets)} target queries → {len(PLS)*len(SMS)*len(targets)} measurements in total", flush=True)
 
-# 结果行数只数一次：rows_returned 会让 heavysql 把整个结果集打到管道里
-# （h2o q3 有 970 万行），每个配置重数一次要好几分钟。
+# Count result rows only once: rows_returned makes heavysql print the entire result set into the pipe
+# (h2o q3 has 9.7 million rows); recounting at every configuration would take several minutes each.
 pre = []
 for suite, db, sf, qn, q in targets:
     _s = hb.Sql(db, "gpu")
@@ -69,42 +69,42 @@ for suite, db, sf, qn, q in targets:
     finally:
         _s.close()
     pre.append((suite, db, sf, qn, hb.Sql.count_wrap(q) if n > 10000 else q, n))
-    print(f"  {suite}/{sf}/{qn}: {n:,} 行" + ("（已包 COUNT）" if n > 10000 else ""), flush=True)
+    print(f"  {suite}/{sf}/{qn}: {n:,} rows" + (" (wrapped in COUNT)" if n > 10000 else ""), flush=True)
 targets = pre
 
 ok, others = hb.gpu_guard()
 if not ok:
-    print(f"!! GPU 上有别人的任务 {others}", file=sys.stderr)
+    print(f"!! other people's jobs {others} on the GPU", file=sys.stderr)
 atexit.register(restore)
-try:                               # 每条 query 前后核对：单进程、PID 未变、只在 GPUS 上
+try:                               # verify before and after every query: single process, PID unchanged, only on GPUS
     guard = hb.Guard()
 except hb.ConfigError as e:
-    sys.exit(f"!! 开跑前配置检查失败，未测任何数据：{e}")
+    sys.exit(f"!! configuration check failed before the run, nothing measured: {e}")
 
 done = set()
-if os.path.exists(a.out):          # 断点续跑
+if os.path.exists(a.out):          # resume support
     for r in csv.DictReader(open(a.out)):
         done.add((r["pl_w"], r["sm_mhz"], r["suite"], r["sf"], r["query"]))
-    print(f"已有 {len(done)} 条，跳过", flush=True)
+    print(f"{len(done)} rows already present, skipping them", flush=True)
 
 rows, t_start = [], time.time()
 for pl in PLS:
     if sh("sudo", "nvidia-smi", "-i", GPUSTR, "-pl", str(pl)).returncode != 0:
-        print(f"  PL={pl} 设置失败，跳过", flush=True); continue
+        print(f"  PL={pl} could not be set, skipping", flush=True); continue
     for sm in SMS:
         if sh("sudo", "nvidia-smi", "-i", GPUSTR, "-lgc", f"{sm},{sm}").returncode != 0:
-            print(f"  SM={sm} 设置失败，跳过", flush=True); continue
-        os.environ["HB_EXPECT_PL"], os.environ["HB_EXPECT_SM"] = str(pl), str(sm)   # 供 Guard 核对
+            print(f"  SM={sm} could not be set, skipping", flush=True); continue
+        os.environ["HB_EXPECT_PL"], os.environ["HB_EXPECT_SM"] = str(pl), str(sm)   # for Guard to verify
         time.sleep(2)
         p_idle = hb.idle_baseline_W(3.0)
-        print(f"--- PL={pl}W SM={sm}MHz  空载 {p_idle:.1f} W "
-              f"（已用 {(time.time()-t_start)/60:.0f} min）---", flush=True)
+        print(f"--- PL={pl}W SM={sm}MHz  idle {p_idle:.1f} W "
+              f"(elapsed {(time.time()-t_start)/60:.0f} min) ---", flush=True)
         for suite, db, sf, qn, qb, nrows in targets:
             if (str(pl), str(sm), suite, sf, qn) in done:
                 continue
             sql = None
             try:
-                guard.check(f"{suite}/{sf}/{qn} PL={pl} SM={sm} 前")
+                guard.check(f"before {suite}/{sf}/{qn} PL={pl} SM={sm}")
                 sql = hb.Sql(db, "gpu")
                 for _ in range(2):
                     t_ms = sql.run(qb)
@@ -115,7 +115,7 @@ for pl in PLS:
                     ls, _ = sql.run_burst(qb, K, timeout=120 + K * 2)
                     t1 = time.perf_counter(); e1 = hb.energy_J()
                     Es.append((e1 - e0) / K * 1000); Ts.append(t1 - t0); lats += ls
-                gpu = guard.check(f"{suite}/{sf}/{qn} PL={pl} SM={sm} 后")
+                gpu = guard.check(f"after {suite}/{sf}/{qn} PL={pl} SM={sm}")
                 E = st.mean(Es); T = st.mean(Ts)
                 row = dict(pl_w=pl, sm_mhz=sm, suite=suite, sf=sf, query=qn, K=K,
                            lat_min_ms=round(min(lats), 3),
@@ -130,8 +130,8 @@ for pl in PLS:
                 print(f"    {suite}/{sf}/{qn}: {row['lat_mean_ms']:8.2f} ms  "
                       f"E {row['E_total_mJ']:9.1f} mJ  dyn {row['E_dyn_mJ']:8.1f}", flush=True)
             except hb.ConfigError as e:
-                print(f"    {suite}/{sf}/{qn}: !! 配置检查失败，中止：{e}", flush=True)
-                sys.exit(2)                # 已跑完的行都已落盘；atexit 负责恢复功率/时钟
+                print(f"    {suite}/{sf}/{qn}: !! configuration check failed, aborting: {e}", flush=True)
+                sys.exit(2)                # finished rows are already on disk; atexit restores power/clocks
             except Exception as e:
                 rows.append(dict(pl_w=pl, sm_mhz=sm, suite=suite, sf=sf, query=qn, K="",
                                  lat_min_ms="", lat_mean_ms="", P_idle_W="", P_load_W="",
@@ -139,19 +139,19 @@ for pl in PLS:
                                  gpu_checked="", error=str(e)[:150]))
                 print(f"    {suite}/{sf}/{qn}: FAIL {str(e)[:90]}", flush=True)
                 if not hb.server_alive():
-                    print("    !! 服务端崩溃，重启", flush=True)
+                    print("    !! server crashed, restarting", flush=True)
                     if hb.restart_server():
                         try:
-                            guard.rebind() # 重启后的新进程也必须通过检查
+                            guard.rebind() # the new process after restart must pass the check too
                         except hb.ConfigError as ce:
-                            print(f"    !! 重启后配置检查失败，中止：{ce}", flush=True)
+                            print(f"    !! configuration check failed after restart, aborting: {ce}", flush=True)
                             sys.exit(2)
                     else:
-                        print("    !! 重启失败，中止", flush=True); sys.exit(2)
+                        print("    !! restart failed, aborting", flush=True); sys.exit(2)
             finally:
                 if sql:
                     sql.close()
-            if rows:                       # 边跑边落盘，支持断点续跑
+            if rows:                       # write as we go, so the run can be resumed
                 new = not os.path.exists(a.out)
                 with open(a.out, "a", newline="") as f:
                     w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
@@ -159,4 +159,4 @@ for pl in PLS:
                     w.writerows(rows[-1:])
 
 restore(); atexit.unregister(restore)
-print(f"-> {a.out}  用时 {(time.time()-t_start)/60:.0f} min")
+print(f"-> {a.out}  took {(time.time()-t_start)/60:.0f} min")

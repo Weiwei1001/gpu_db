@@ -1,24 +1,24 @@
 #!/bin/bash
-# 一键全量：自动选一张空闲 GPU → 检查 sudo/磁盘 → 自动发现现成数据（没有就生成/下载）→ 构建（如需）→ Cat A/B/C
+# One-shot full run: auto-pick an idle GPU → check sudo/disk → auto-discover existing data (generate/download if missing) → build (if needed) → Cat A/B/C
 #
-#   ./run_full.sh                                  # 全部默认：A + B + Cat C lite（6 条代表 query），单卡 H100 约 5.5 h
-#   ./run_full.sh --catc-scope ab                  # Cat C 按 repo 规格（每个网格点重跑 A+B，约 4–5 天）
+#   ./run_full.sh                                  # all defaults: A + B + Cat C lite (6 representative queries), about 5.5 h on a single H100
+#   ./run_full.sh --catc-scope ab                  # Cat C per repo spec (rerun A+B at every grid point, about 4–5 days)
 #   ./run_full.sh --data-roots /path/gpu_db:/path/other --data-dir /bigdisk/hb_repro
 #
 #   One command from an existing gpu_db checkout (reuses its tests/ data):
 #     git pull && heavydb_reproduce/run_full.sh
 #   One command from a fresh machine:
 #     git clone https://github.com/Weiwei1001/gpu_db.git && gpu_db/heavydb_reproduce/run_full.sh
-#   ./run_full.sh --dry-run                        # 只打印选中的 GPU、磁盘、找到的数据，不构建不运行
+#   ./run_full.sh --dry-run                        # only print the chosen GPU, disk, and data found; no build, no run
 #
-# 选项：
-#   --gpu N            指定卡；不给则自动选：只有一张卡就用它，多张卡取没有任何进程的卡里显存最大的
-#   --data-roots A:B   现成数据的搜索根（别人跑 gpu_db 留下的 tests/ 目录、csv-*/、*.duckdb、hits.parquet）
-#                      默认自动查：--data-dir、~/gpu_db、本包同级的 gpu_db
-#   --data-dir DIR     HeavyDB 库与临时文件目录（全量约 70 GB；默认本包下 data/，空间不够会提示）
-#   --catc-scope S     Cat C 范围：lite（默认）| a | ab；见 reproduce.sh
-#   --dry-run          只做 GPU/磁盘/数据发现，然后退出
-#   其余参数原样传给 reproduce.sh（--skip-build、--heavydb-home、--catc-limit、--stages ...）
+# Options:
+#   --gpu N            GPU to use; if omitted, auto-pick: with one GPU use it, with several take the one with no processes and the most memory
+#   --data-roots A:B   search roots for existing data (tests/ dirs, csv-*/, *.duckdb, hits.parquet left by earlier gpu_db runs)
+#                      checked by default: --data-dir, ~/gpu_db, a gpu_db next to this package
+#   --data-dir DIR     directory for HeavyDB databases and temp files (full run about 70 GB; default data/ under this package; warns if space is short)
+#   --catc-scope S     Cat C scope: lite (default) | a | ab; see reproduce.sh
+#   --dry-run          only do GPU/disk/data discovery, then exit
+#   any other arguments are passed through to reproduce.sh (--skip-build, --heavydb-home, --catc-limit, --stages ...)
 set -euo pipefail
 HB_ROOT="$(cd "$(dirname "$0")" && pwd)"
 log(){ echo "[$(date +%T)] [full] $*"; }
@@ -29,33 +29,33 @@ while [ $# -gt 0 ]; do case "$1" in
   -h|--help) sed -n '2,21p' "$0"; exit 0;; *) PASS+=("$1"); shift;; esac; done
 
 # ---------- GPU ----------
-command -v nvidia-smi >/dev/null || { log "!! 没有 nvidia-smi"; exit 1; }
+command -v nvidia-smi >/dev/null || { log "!! nvidia-smi not found"; exit 1; }
 NGPU=$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)
 if [ -z "$GPU" ]; then
   if [ "$NGPU" -eq 1 ]; then GPU=0
   else
     BUSY=$(nvidia-smi --query-compute-apps=gpu_uuid --format=csv,noheader | sort -u)
     best_mem=-1
-    while IFS=, read -r i u mem; do          # 空闲卡里取显存最大的（避免选中小的显示卡）
+    while IFS=, read -r i u mem; do          # among idle GPUs take the one with the most memory (avoids picking a small display GPU)
       i=${i// /}; u=${u// /}; mem=${mem// /}
       grep -q "$u" <<< "$BUSY" && continue
       [ "$mem" -gt "$best_mem" ] && { GPU=$i; best_mem=$mem; }
     done < <(nvidia-smi --query-gpu=index,uuid,memory.total --format=csv,noheader,nounits)
-    [ -n "$GPU" ] || { log "!! $NGPU 张卡都有进程在跑，用 --gpu N 指定（或等空闲）"; exit 1; }
+    [ -n "$GPU" ] || { log "!! all $NGPU GPUs have processes running; pick one with --gpu N (or wait until one is idle)"; exit 1; }
   fi
 fi
-log "GPU $GPU / 共 $NGPU 张：$(nvidia-smi -i "$GPU" --query-gpu=name,memory.total,power.max_limit --format=csv,noheader)"
-sudo -n nvidia-smi -L >/dev/null 2>&1 || log "!! 没有 passwordless sudo：Cat C（改功率/时钟）会被跳过，A/B 照跑"
+log "GPU $GPU of $NGPU: $(nvidia-smi -i "$GPU" --query-gpu=name,memory.total,power.max_limit --format=csv,noheader)"
+sudo -n nvidia-smi -L >/dev/null 2>&1 || log "!! no passwordless sudo: Cat C (power/clock changes) will be skipped; A/B still run"
 
-# ---------- 磁盘 ----------
+# ---------- Disk ----------
 mkdir -p "$DATA_DIR"
 FREE_GB=$(df -BG --output=avail "$DATA_DIR" | tail -1 | tr -dc 0-9)
-[ "$FREE_GB" -ge 80 ] || log "!! $DATA_DIR 只剩 ${FREE_GB} GB，全量需要约 70 GB（数据）+ 临时文件；不够请 --data-dir 指到大盘"
+[ "$FREE_GB" -ge 80 ] || log "!! $DATA_DIR has only ${FREE_GB} GB free; the full run needs about 70 GB (data) + temp files. If short, point --data-dir at a big disk"
 
-# ---------- 现成数据 ----------
+# ---------- Existing data ----------
 REPO_ROOT="$(dirname "$HB_ROOT")"   # this package lives inside the gpu_db checkout: its tests/ data is right here
 export HB_DATA_ROOTS="${ROOTS:+$ROOTS:}$DATA_DIR:$REPO_ROOT:$HOME/gpu_db:$REPO_ROOT/gpu_db"
-log "搜索现成数据：$(tr ':' ' ' <<< "$HB_DATA_ROOTS")"
+log "searching for existing data: $(tr ':' ' ' <<< "$HB_DATA_ROOTS")"
 found=0
 for r in $(tr ':' ' ' <<< "$HB_DATA_ROOTS"); do
   for pat in tests/tpch/csv-* tpch/csv-* tests/h2o/csv-* h2o/csv-* tests/clickbench/csv-* clickbench/csv-* \
@@ -63,9 +63,9 @@ for r in $(tr ':' ' ' <<< "$HB_DATA_ROOTS"); do
     for p in "$r"/$pat; do [ -e "$p" ] && { echo "    $p"; found=$((found+1)); }; done
   done
 done
-[ "$found" -gt 0 ] && log "找到 $found 项，能对上的数据集直接导入；其余生成/下载" || log "没找到现成数据，全部生成/下载（ClickBench 需要访问 datasets.clickhouse.com）"
+[ "$found" -gt 0 ] && log "found $found items; matching datasets are imported directly, the rest are generated/downloaded" || log "no existing data found; everything will be generated/downloaded (ClickBench needs access to datasets.clickhouse.com)"
 
-# ---------- 跑 ----------
-log "Cat C 范围：$CATC_SCOPE（lite 约 25 min；ab 约 4–5 天，用 --catc-scope ab 选择）"
-[ "$DRY" = 1 ] && { log "--dry-run：到此为止，没有构建或运行"; exit 0; }
+# ---------- Run ----------
+log "Cat C scope: $CATC_SCOPE (lite about 25 min; ab about 4–5 days, select with --catc-scope ab)"
+[ "$DRY" = 1 ] && { log "--dry-run: stopping here, nothing built or run"; exit 0; }
 exec "$HB_ROOT/reproduce.sh" --gpu "$GPU" --full --data-dir "$DATA_DIR" --catc-scope "$CATC_SCOPE" "${PASS[@]}"

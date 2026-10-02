@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""准备一个数据集并导入 HeavyDB：gen_data.py <suite> <db> <param> [<sf>]
+"""Prepare one dataset and import it into HeavyDB: gen_data.py <suite> <db> <param> [<sf>]
    tpch <db> <sf>        h2o <db> <rows>        clickbench <db> <pct>
 
-先在 HB_DATA_ROOTS（冒号分隔）里找现成数据——别人跑 gpu_db 的 Maximus/Sirius 时留下的：
+First look for existing data in HB_DATA_ROOTS (colon-separated) -- left behind by earlier Maximus/Sirius runs of gpu_db:
    TPC-H      tests/tpch/csv-<N>/*.csv | tpch/csv-<N>/ | tests/tpch_duckdb/tpch_sf<N>.duckdb | sirius_db/tpch_<N>.duckdb
    H2O        tests/h2o/csv-<S>/groupby.csv | h2o/csv-<S>/ | tests/h2o_duckdb/h2o_<S>.duckdb | sirius_db/h2o_<S>.duckdb
    ClickBench tests/clickbench/csv-<N>/t.csv | clickbench/csv-<N>/ | tests/click_duckdb/clickbench_<N>.duckdb
-              | sirius_db/clickbench_<N>.duckdb | 本地 hits.parquet（按 repo 规则取前 总行数×N/70 行）
-找到就从它导入（三个引擎用同一份行）；找不到再生成：TPC-H 用 duckdb dbgen（确定性），H2O 按论文分布生成，
-ClickBench 先把 hits.parquet（14.8 GB）下载到 --data-dir 下（只下一次，四个 SF 共用），再按 repo 规则取前 N 行。
-一律经 Parquet 导入，列类型按 schemas/*.sql 强制转换；导完即删临时文件。来源记入 results/<mode>/data_sources.csv。"""
+              | sirius_db/clickbench_<N>.duckdb | a local hits.parquet (first total_rows×N/70 rows, per the repo rule)
+If found, import from it (all three engines use the same rows); otherwise generate: TPC-H with duckdb dbgen (deterministic),
+H2O generated with the paper's distribution, ClickBench by first downloading hits.parquet (14.8 GB) under --data-dir (once,
+shared by the four SFs) and then taking the first N rows per the repo rule.
+Everything is imported via Parquet with column types forced to match schemas/*.sql; temp files are deleted after import.
+The source is recorded in results/<mode>/data_sources.csv."""
 import csv, glob, os, re, subprocess, sys, time
 import duckdb
 
@@ -22,9 +24,9 @@ STAGE = os.path.join(DATA_DIR, "stage"); os.makedirs(STAGE, exist_ok=True)
 RESULTS = os.environ.get("HB_RESULTS_BASE") or os.path.join(HB_ROOT, "results", os.environ.get("HB_MODE", "smoke"))
 SCHEMA = {"tpch": "tpch.sql", "h2o": "h2o.sql", "clickbench": "clickbench.sql"}[suite]
 CB_URL = "https://datasets.clickhouse.com/hits_compatible/hits.parquet"
-CB_FULL_CSV_GB = 70.0                                   # repo generate_clickbench.py 的换算常数
+CB_FULL_CSV_GB = 70.0                                   # conversion constant from the repo's generate_clickbench.py
 
-# 搜索根：环境变量 + 常见位置。只查固定几种布局，不递归扫盘。
+# Search roots: environment variable + common locations. Only a few fixed layouts are checked, no recursive disk scan.
 ROOTS = [p for p in os.environ.get("HB_DATA_ROOTS", "").split(":") if p]
 ROOTS += [DATA_DIR, os.path.join(DATA_DIR, "gpudb_data"), os.path.expanduser("~/gpu_db"),
           os.path.join(os.path.dirname(HB_ROOT), "gpu_db"), os.path.join(HB_ROOT, "..", "..", "gpu_db")]
@@ -36,7 +38,7 @@ def hsql(d, sql):
     return (r.stdout + r.stderr).strip()
 
 def schema_types():
-    """schemas/<suite>.sql -> {表: [(列, duckdb 类型)]}，导入前按它 CAST，保证 parquet 类型与 HeavyDB 表一致。"""
+    """schemas/<suite>.sql -> {table: [(column, duckdb type)]}; CAST to it before import so the parquet types match the HeavyDB table."""
     out = {}
     for m in re.finditer(r"CREATE TABLE (\w+)\s*\((.*?)\);", open(os.path.join(HB_ROOT, "schemas", SCHEMA)).read(), re.S):
         cols = []
@@ -56,7 +58,7 @@ def cast_select(table, src):
 def imp(table, path):
     out = hsql(db, f"COPY {table} FROM '{path}' WITH (source_type='parquet_file');")
     if "Loaded" not in out:
-        sys.exit(f"导入 {table} 失败: {out[:300]}")
+        sys.exit(f"import of {table} failed: {out[:300]}")
     os.remove(path)
 
 def first(paths):
@@ -66,7 +68,7 @@ def first(paths):
             return hits[0]
     return None
 
-# ---------- 找现成数据 ----------
+# ---------- Find existing data ----------
 def n(s):                                   # "sf10" -> "10", "4gb" -> "4gb"
     return s[2:] if s.startswith("sf") else s
 
@@ -97,13 +99,13 @@ def discover():
     return None
 
 def cb_source_sql(src):
-    """repo 的 CSV 把 EventTime/EventDate 转成了时间戳；HeavyDB schema 与 query 用的是整数秒/天，按源类型转回去。"""
+    """The repo's CSV converted EventTime/EventDate to timestamps; the HeavyDB schema and queries use integer seconds/days, so convert back based on the source type."""
     typed = dict(TYPES["t"])
     desc = {c[0]: c[1].upper() for c in con.execute(f"DESCRIBE SELECT * FROM {src} LIMIT 1").fetchall()}
     sel = []
     for c, t in TYPES["t"]:
         if c not in desc:
-            sys.exit(f"来源缺列 {c}")
+            sys.exit(f"source is missing column {c}")
         st = desc[c]
         if c == "EventTime" and st.startswith("TIMESTAMP"):
             sel.append("CAST(epoch(EventTime) AS BIGINT) AS EventTime")
@@ -113,7 +115,7 @@ def cb_source_sql(src):
             sel.append(f"CAST({c} AS {t}) AS {c}")
     return f"SELECT {', '.join(sel)} FROM {src}"
 
-# ---------- 主流程 ----------
+# ---------- Main flow ----------
 t0 = time.time()
 con = duckdb.connect(":memory:")
 hsql("heavyai", f"DROP DATABASE IF EXISTS {db};")
@@ -125,7 +127,7 @@ source = ""
 if found:
     path, kind = found
     source = path
-    print(f"  {db}: 用现成数据 {path}", flush=True)
+    print(f"  {db}: using existing data {path}", flush=True)
     if kind == "duckdb":
         con.execute(f"ATTACH '{path}' AS src (READ_ONLY)")
 
@@ -152,7 +154,7 @@ elif suite == "h2o":
         src = f"read_csv_auto('{path}', header=true)" if kind == "csv" else "src.groupby"
         con.execute(f"COPY ({cast_select('groupby', src)}) TO '{p}' (FORMAT PARQUET)")
     else:
-        source = f"generate_h2o 同款分布，{int(param)} 行（random() 无种子）"
+        source = f"same distribution as generate_h2o, {int(param)} rows (random() without seed)"
         con.execute(f"""COPY (SELECT
           'id'||LPAD(CAST(1+(random()*99)::int AS VARCHAR),3,'0') AS id1,
           'id'||LPAD(CAST(1+(random()*99)::int AS VARCHAR),3,'0') AS id2,
@@ -171,30 +173,30 @@ else:
     elif found and kind == "duckdb":
         con.execute(f"COPY ({cb_source_sql('src.t')}) TO '{p}' (FORMAT PARQUET)")
     else:
-        # repo 规则：取前 总行数 × SF/70 行（generate_clickbench.py 的 LIMIT）
-        if found:                                   # 本地 hits.parquet
+        # repo rule: take the first total_rows × SF/70 rows (the LIMIT in generate_clickbench.py)
+        if found:                                   # local hits.parquet
             pq = path
         elif os.environ.get("HB_MODE", "smoke") == "full":
-            # 远程按行读太慢（httpfs 取 140 万行超过 15 分钟），全量模式下载一次到本地，四个 SF 共用
+            # remote row-wise reads are too slow (httpfs took over 15 min for 1.4 million rows); in full mode download once locally, shared by the four SFs
             pq = os.path.join(DATA_DIR, "clickbench", "hits.parquet")
             if not os.path.exists(pq):
                 os.makedirs(os.path.dirname(pq), exist_ok=True)
-                print(f"  下载 {CB_URL}（14.8 GB）-> {pq}", flush=True)
+                print(f"  downloading {CB_URL} (14.8 GB) -> {pq}", flush=True)
                 r = subprocess.run(["wget", "-q", "-c", "-O", pq + ".part", CB_URL])
                 if r.returncode != 0:
-                    sys.exit("下载 hits.parquet 失败（需要能访问 datasets.clickhouse.com）")
+                    sys.exit("download of hits.parquet failed (needs access to datasets.clickhouse.com)")
                 os.rename(pq + ".part", pq)
-            source = f"{pq}（下载自 {CB_URL}）"
+            source = f"{pq} (downloaded from {CB_URL})"
         else:
             pq = CB_URL
             con.execute("INSTALL httpfs; LOAD httpfs;")
-            source = f"{CB_URL} 远程随机采样 {param}%"
+            source = f"{CB_URL} remote random sample {param}%"
         if os.environ.get("HB_MODE", "smoke") == "full":
-            total = con.execute(f"SELECT count(*) FROM read_parquet('{pq}')").fetchone()[0]   # 只读元数据
+            total = con.execute(f"SELECT count(*) FROM read_parquet('{pq}')").fetchone()[0]   # metadata only
             limit = max(1, int(total * min(1.0, float(n(sf)) / CB_FULL_CSV_GB)))
             con.execute(f"COPY ({cb_source_sql(f'(SELECT * FROM read_parquet(\'{pq}\') LIMIT {limit}) AS h')}) "
                         f"TO '{p}' (FORMAT PARQUET)")
-        else:                                       # smoke：随机小样本
+        else:                                       # smoke: small random sample
             con.execute(f"COPY (SELECT * FROM read_parquet('{pq}') USING SAMPLE {float(param)} PERCENT (bernoulli, 42)) "
                         f"TO '{p}' (FORMAT PARQUET)")
     imp("t", p)
@@ -208,4 +210,4 @@ with open(log, "a", newline="") as f:
     if new:
         w.writerow(["db", "suite", "sf", "rows", "source"])
     w.writerow([db, suite, sf, nrows, source])
-print(f"  {db}: {nrows} 行，{time.time()-t0:.0f}s  <- {source}", flush=True)
+print(f"  {db}: {nrows} rows, {time.time()-t0:.0f}s  <- {source}", flush=True)

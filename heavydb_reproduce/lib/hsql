@@ -1,5 +1,5 @@
 #!/bin/bash
-# hsql <db> ["sql"]   —— 不给 sql 就从 stdin 读
+# hsql <db> ["sql"]   -- reads from stdin when no sql is given
 HB_ROOT="${HB_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 HEAVYDB_HOME="${HEAVYDB_HOME:-$HB_ROOT/heavydb}"
 DEPS_PREFIX="${DEPS_PREFIX:-/usr/local/mapd-deps}"
