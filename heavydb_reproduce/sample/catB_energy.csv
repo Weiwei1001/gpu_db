@@ -1,0 +1,2 @@
+suite,sf,query,K,cold,n_rows,count_wrapped,window_s,lat_min_ms,lat_mean_ms,P_load_W,P_idle_W,duty,E_total_mJ,E_dyn_mJ,cv_pct,ci95_mJ,E_paper_mJ,paper_err_pct,gpu_checked,error
+tpch,sf10,q1,20,True,4,False,9.113,139.0,143.483,122.47,117.72,0.315,55801.733,2163.908,0.6,463.908,17023.299,-69.49,6,

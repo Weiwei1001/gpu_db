@@ -107,6 +107,18 @@ The only thing left unverified is "whether the apt list is missing something on 
 
 No check aborted at any point. At the Cat C default level (700 W/1980 MHz), the dynamic energy of the same queries differs from the main Cat A experiment by 2–26% (short queries fluctuate more).
 
+## A worked example
+
+`sample/` holds every metric produced for one query (TPC-H SF10 / q1), as a concrete picture of
+what a single row of the output means: the three raw latencies, the client wall clock, idle /
+window / peak power, total and dynamic energy, the amplification factor and duty cycle, the 25
+Category C grid points, and the power time series plotted in `power_time_tpch_sf10_q1.png`.
+
+That plot is also the clearest illustration of why energy comes from the counter rather than the
+driver reading: the hardware counter is at ~190 W on the first sample, while `power.draw` -- a 1 s
+moving average -- needs a full second to climb there from 119 W. A 15 ms query is long finished by
+then.
+
 ## Layout
 
 ```
@@ -116,4 +128,6 @@ stages/           the 5 stage scripts
 lib/              hbench.py (NVML + heavysql session + crash recovery), the runners, hsql, start-heavydb.sh, gen_data.py, datasets.sh
 queries/          tpch(22) h2o(10) clickbench(43) clickbench_approx(6) case_bench(5)
 schemas/          tpch.sql h2o.sql clickbench.sql
+sample/           one fully worked query: all of its metrics, plus the power-time plot
+reference_results/  output of the 2026-09-30 full run, for comparison
 ```
