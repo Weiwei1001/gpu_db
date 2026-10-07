@@ -10,6 +10,7 @@
 #   One command from a fresh machine:
 #     git clone https://github.com/Weiwei1001/gpu_db.git && gpu_db/heavydb_reproduce/run_full.sh
 #   ./run_full.sh --dry-run                        # only print the chosen GPU, disk, and data found; no build, no run
+#   Split run (validate A/B before committing to the long Cat C grid): ./run_ab.sh ... then ./run_c.sh ...
 #
 # Options:
 #   --gpu N            GPU to use; if omitted, auto-pick: with one GPU use it, with several take the one with no processes and the most memory
@@ -17,16 +18,17 @@
 #                      checked by default: --data-dir, ~/gpu_db, a gpu_db next to this package
 #   --data-dir DIR     directory for HeavyDB databases and temp files (full run about 70 GB; default data/ under this package; warns if space is short)
 #   --catc-scope S     Cat C scope: lite (default) | a | ab; see reproduce.sh
+#   --stages "1 2 3 4" run only the listed stages (passed through to reproduce.sh; default all 5)
 #   --dry-run          only do GPU/disk/data discovery, then exit
-#   any other arguments are passed through to reproduce.sh (--skip-build, --heavydb-home, --catc-limit, --stages ...)
+#   any other arguments are passed through to reproduce.sh (--skip-build, --heavydb-home, --catc-limit ...)
 set -euo pipefail
 HB_ROOT="$(cd "$(dirname "$0")" && pwd)"
 log(){ echo "[$(date +%T)] [full] $*"; }
-GPU="" DATA_DIR="$HB_ROOT/data" ROOTS="" CATC_SCOPE="lite" DRY=0 PASS=()
+GPU="" DATA_DIR="$HB_ROOT/data" ROOTS="" CATC_SCOPE="lite" STAGES="1 2 3 4 5" DRY=0 PASS=()
 while [ $# -gt 0 ]; do case "$1" in
   --gpu) GPU="$2"; shift 2;; --data-roots) ROOTS="$2"; shift 2;; --data-dir) DATA_DIR="$2"; shift 2;;
-  --catc-scope) CATC_SCOPE="$2"; shift 2;; --dry-run) DRY=1; shift;;
-  -h|--help) sed -n '2,21p' "$0"; exit 0;; *) PASS+=("$1"); shift;; esac; done
+  --catc-scope) CATC_SCOPE="$2"; shift 2;; --stages) STAGES="$2"; PASS+=("$1" "$2"); shift 2;; --dry-run) DRY=1; shift;;
+  -h|--help) sed -n '2,23p' "$0"; exit 0;; *) PASS+=("$1"); shift;; esac; done
 
 # ---------- GPU ----------
 command -v nvidia-smi >/dev/null || { log "!! nvidia-smi not found"; exit 1; }
@@ -45,7 +47,7 @@ if [ -z "$GPU" ]; then
   fi
 fi
 log "GPU $GPU of $NGPU: $(nvidia-smi -i "$GPU" --query-gpu=name,memory.total,power.max_limit --format=csv,noheader)"
-sudo -n nvidia-smi -L >/dev/null 2>&1 || log "!! no passwordless sudo: Cat C (power/clock changes) will be skipped; A/B still run"
+[[ " $STAGES " == *" 5 "* ]] && { sudo -n nvidia-smi -L >/dev/null 2>&1 || log "!! no passwordless sudo: Cat C (power/clock changes) will be skipped; A/B still run"; }
 
 # ---------- Disk ----------
 mkdir -p "$DATA_DIR"
@@ -66,6 +68,6 @@ done
 [ "$found" -gt 0 ] && log "found $found items; matching datasets are imported directly, the rest are generated/downloaded" || log "no existing data found; everything will be generated/downloaded (ClickBench needs access to datasets.clickhouse.com)"
 
 # ---------- Run ----------
-log "Cat C scope: $CATC_SCOPE (lite about 25 min; ab about 4–5 days, select with --catc-scope ab)"
+[[ " $STAGES " == *" 5 "* ]] && log "Cat C scope: $CATC_SCOPE (lite about 25 min; ab about 4–5 days, select with --catc-scope ab)" || log "stages $STAGES only (no Cat C)"
 [ "$DRY" = 1 ] && { log "--dry-run: stopping here, nothing built or run"; exit 0; }
 exec "$HB_ROOT/reproduce.sh" --gpu "$GPU" --full --data-dir "$DATA_DIR" --catc-scope "$CATC_SCOPE" "${PASS[@]}"
