@@ -27,6 +27,24 @@ and runs Category A, B, and C-lite. About 5.5 h on one H100 when the data is alr
 HB_SFS_TPCH="1 10" HB_SFS_H2O="1 4" HB_SFS_CB="1 10" ./reproduce.sh --gpu 4 --full   # fewer SFs
 ```
 
+### Split run: validate Category A/B before starting Category C
+
+The Cat C grid reruns A (and B) at 25 power/clock points, so it is worth checking the A/B numbers before spending hours or days on it.
+`run_ab.sh` and `run_c.sh` take the same options as `run_full.sh` and share its GPU pick and data discovery:
+
+```bash
+./run_ab.sh --gpu 4 --data-dir /bigdisk/hb_repro      # stages 1–4 only: build, data, Cat A, Cat B (about 3.5 h on one H100 with data present)
+#   ... ends with a check of catA_powersample.csv / catB_timing.csv / catB_energy.csv (rows per suite×SF, failed queries,
+#   Cat A rows with negative E_dyn_mJ) and prints the matching run_c.sh commands
+./run_c.sh --gpu 4 --data-dir /bigdisk/hb_repro                                  # stage 5 only, Cat C lite (about 25 min)
+./run_c.sh --gpu 4 --data-dir /bigdisk/hb_repro --catc-scope ab --catc-limit 1   # Cat C test, 1 query per benchmark×SF (about 7 h)
+./run_c.sh --gpu 4 --data-dir /bigdisk/hb_repro --catc-scope ab                  # Cat C per repo spec (about 4–5 days)
+```
+
+`run_c.sh` skips build and data, requires `--gpu` (results are keyed by GPU model, so it must be the GPU the A/B results came from),
+needs the same `--data-dir` (the databases live there), and refuses to start when the A/B result files for that GPU model are missing
+(`--no-check` overrides). `python lib/check_ab.py results/full/<gpu-model>` runs the same check by hand at any time.
+
 ## Stages
 
 | # | Script | What it does |
@@ -107,13 +125,29 @@ The only thing left unverified is "whether the apt list is missing something on 
 
 No check aborted at any point. At the Cat C default level (700 W/1980 MHz), the dynamic energy of the same queries differs from the main Cat A experiment by 2–26% (short queries fluctuate more).
 
+## A worked example
+
+`sample/` holds every metric produced for one query (TPC-H SF10 / q1), as a concrete picture of
+what a single row of the output means: the three raw latencies, the client wall clock, idle /
+window / peak power, total and dynamic energy, the amplification factor and duty cycle, the 25
+Category C grid points, and the power time series plotted in `power_time_tpch_sf10_q1.png`.
+
+That plot is also the clearest illustration of why energy comes from the counter rather than the
+driver reading: the hardware counter is at ~190 W on the first sample, while `power.draw` -- a 1 s
+moving average -- needs a full second to climb there from 119 W. A 15 ms query is long finished by
+then.
+
 ## Layout
 
 ```
 run_full.sh       one-shot full-run entry point (picks the GPU, finds data, checks disk/sudo, then calls reproduce.sh --full)
+run_ab.sh         same, but Category A + B only (stages 1–4) followed by a result check; run this first
+run_c.sh          Category C only (stage 5) on an existing build/data; refuses to start without A/B results
 reproduce.sh      stage-by-stage entry point
 stages/           the 5 stage scripts
-lib/              hbench.py (NVML + heavysql session + crash recovery), the runners, hsql, start-heavydb.sh, gen_data.py, datasets.sh
+lib/              hbench.py (NVML + heavysql session + crash recovery), the runners, hsql, start-heavydb.sh, gen_data.py, datasets.sh, check_ab.py
 queries/          tpch(22) h2o(10) clickbench(43) clickbench_approx(6) case_bench(5)
 schemas/          tpch.sql h2o.sql clickbench.sql
+sample/           one fully worked query: all of its metrics, plus the power-time plot
+reference_results/  output of the 2026-09-30 full run, for comparison
 ```

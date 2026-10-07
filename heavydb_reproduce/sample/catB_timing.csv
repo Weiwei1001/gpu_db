@@ -1,0 +1,2 @@
+suite,sf,db,mode,cold,query,reps,min_ms,mean_ms,median_ms,p95_ms,max_ms,cv_pct,n_rows,count_wrapped,wall_min_ms,wall_mean_ms,gpu_checked,error
+tpch,sf10,tpch_sf10,gpu,True,q1,3,142.0,147.0,148.0,148.0,151.0,2.55,4,False,153.959,158.972,6,

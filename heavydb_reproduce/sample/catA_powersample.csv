@@ -1,0 +1,2 @@
+suite,sf,db,query,n_rows,count_wrapped,reps,lat_ms,lat_min_ms,lat_mean_ms,wall_min_ms,wall_mean_ms,amplified,K,window_s,duty,n_samples,P_idle_W,P_win_W,P_peak_W,E_total_mJ,E_dyn_mJ,error
+tpch,sf10,tpch_sf10,q1,4,False,3,16;15;14,14.0,15.0,23.306,24.126,True,87,1.5332,0.86,16,118.19,187.33,199.11,3301.264,1218.385,
