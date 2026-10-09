@@ -29,6 +29,8 @@ rows = []
 for suite, db in [(k, v) for k, v in SUITES.items() if k in only]:
     d = os.path.join(QDIR, suite)
     files = sorted(os.listdir(d), key=qsort)
+    if _os.environ.get("HB_SCREEN_QUERIES"):          # re-screen only these queries (see stages/06_rerun.sh)
+        files = [f for f in files if f[:-4] in _os.environ["HB_SCREEN_QUERIES"].split(",")]
     print(f"\n===== {suite}  ({db})  {len(files)} queries =====")
     for fn in files:
         sql = open(os.path.join(d, fn)).read()
@@ -40,12 +42,13 @@ for suite, db in [(k, v) for k, v in SUITES.items() if k in only]:
         wall = time.time() - t0
         nstmt = len([x for x in sql.split(";") if x.strip()])
         ms = [float(m) for m in re.findall(r"Execution time: ([\d.]+) ms", out)]
-        ok = len(ms) >= nstmt
+        ok = nstmt > 0 and len(ms) >= nstmt     # an empty file is not a pass
         errline = None
         if not ok:
             cand = [l.strip() for l in out.splitlines()
                     if l.strip() and "Execution time" not in l and "Total time" not in l]
-            errline = next((l for l in cand if ERR_PAT.search(l)), cand[-1] if cand else "no output")
+            errline = ("empty query file" if nstmt == 0 else
+                       next((l for l in cand if ERR_PAT.search(l)), cand[-1] if cand else "no output"))
         rows.append(dict(suite=suite, query=fn[:-4], db=db, ok=ok,
                          exec_ms=round(sum(ms), 2) if ms else "",
                          wall_s=round(wall, 2), error=(errline or "")[:200]))
@@ -53,6 +56,13 @@ for suite, db in [(k, v) for k, v in SUITES.items() if k in only]:
         print(f"  {flag} {fn[:-4]:6s} {rows[-1]['exec_ms'] or '-':>10} ms   {rows[-1]['error'][:90]}")
 
 out_csv = _os.path.join(_os.environ.get("HB_RESULTS_BASE") or _os.path.join(HB_ROOT, "results", _os.environ.get("HB_MODE", "smoke")), "query_screen_%s.csv" % "_".join(only))
+if _os.environ.get("HB_SCREEN_QUERIES") and _os.path.exists(out_csv):    # merge: replace only the re-screened rows
+    new = {(r["suite"], r["query"]): r for r in rows}
+    old = list(csv.DictReader(open(out_csv)))
+    rows = [new.pop((r["suite"], r["query"]), r) for r in old] + list(new.values())
+    rows.sort(key=lambda r: qsort(r["query"]))
+    for r in rows:
+        r["ok"] = str(r["ok"]) == "True"
 with open(out_csv, "w", newline="") as f:
     w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
     w.writeheader(); w.writerows(rows)

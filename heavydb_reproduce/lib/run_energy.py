@@ -57,11 +57,7 @@ rows = []
 def dump(rows):
     if not rows:
         return
-    new = not os.path.exists(a.out)
-    with open(a.out, "a", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-        if new: w.writeheader()
-        w.writerows(rows)
+    hb.append_csv(a.out, rows)
     print(f"-> {a.out}")
 for name, q in qs:
     try:

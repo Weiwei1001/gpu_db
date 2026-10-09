@@ -92,6 +92,7 @@ if has 2 && [ "$SKIP_DATA" = 0 ]; then bash "$HB_ROOT/stages/02_data.sh"; else l
 has 3 && bash "$HB_ROOT/stages/03_cat_a.sh"
 has 4 && bash "$HB_ROOT/stages/04_cat_b.sh"
 has 5 && HB_QUERY_LIMIT="$CATC_LIMIT" bash "$HB_ROOT/stages/05_cat_c.sh"
+has 6 && bash "$HB_ROOT/stages/06_rerun.sh"     # only when asked for (./fix_results.sh); not in the default stage list
 
 # ---------- Wrap-up ----------
 if sudo -n true 2>/dev/null; then sudo nvidia-smi -i "$GPU" -rgc >/dev/null 2>&1 || true

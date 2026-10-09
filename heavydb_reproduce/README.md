@@ -44,6 +44,22 @@ The Cat C grid reruns A (and B) at 25 power/clock points, so it is worth checkin
 `run_c.sh` skips build and data, requires `--gpu` (results are keyed by GPU model, so it must be the GPU the A/B results came from),
 needs the same `--data-dir` (the databases live there), and refuses to start when the A/B result files for that GPU model are missing
 (`--no-check` overrides). `python lib/check_ab.py results/full/<gpu-model>` runs the same check by hand at any time.
+`run_c.sh` (and `run_full.sh`) default to **Cat C lite**, not the repo spec; pass `--catc-scope ab` for the spec version.
+Stage 5 writes `catC_scope.txt` into the results directory saying which one it ran.
+
+### Repairing results from before 2026-10-09
+
+Until 2026-10-09 `queries/tpch/q14.sql` and `queries/clickbench/q28.sql` were empty (the SQL extractor missed their
+`\"...\"` quoting), so every row for those two queries is a 0 ms measurement of nothing, and `catC_grid.csv` (Cat C lite)
+had a `duty` column 3x too large (energies were not affected). After `git pull`, repair an existing run in place, on the same
+GPU and `--data-dir` as the original run (about 10 min; old CSVs are backed up to `results/full/<gpu>/backup_<time>/`):
+
+```bash
+./fix_results.sh --gpu 4 --data-dir /bigdisk/hb_repro
+```
+
+TPC-H q14 then runs normally; ClickBench q28 fails screening on HeavyDB (`MIN(Referer)`: "Aggregate on TEXT is not supported
+yet", like q21–q23) and is left out. Run Cat C after this repair: the full Cat C reruns Cat A/B with the screening results.
 
 ## Stages
 
@@ -143,8 +159,9 @@ then.
 run_full.sh       one-shot full-run entry point (picks the GPU, finds data, checks disk/sudo, then calls reproduce.sh --full)
 run_ab.sh         same, but Category A + B only (stages 1–4) followed by a result check; run this first
 run_c.sh          Category C only (stage 5) on an existing build/data; refuses to start without A/B results
+fix_results.sh    re-measure a few queries in existing A/B results (stage 6; default: the formerly empty tpch q14 / clickbench q28)
 reproduce.sh      stage-by-stage entry point
-stages/           the 5 stage scripts
+stages/           the 5 stage scripts, plus 06_rerun.sh (used only by fix_results.sh)
 lib/              hbench.py (NVML + heavysql session + crash recovery), the runners, hsql, start-heavydb.sh, gen_data.py, datasets.sh, check_ab.py
 queries/          tpch(22) h2o(10) clickbench(43) clickbench_approx(6) case_bench(5)
 schemas/          tpch.sql h2o.sql clickbench.sql

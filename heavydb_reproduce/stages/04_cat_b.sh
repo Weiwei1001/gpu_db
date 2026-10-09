@@ -9,7 +9,8 @@ log(){ echo "[$(date +%T)] [catB${HB_LOG_TAG}] $*"; }
 if [ "${HB_MODE:-smoke}" = smoke ]; then T_EXTRA="--reps 2 --min-reps 1 --budget 10"; E_EXTRA="--trials 1 --window 0.5"
 else T_EXTRA="--reps 3 --warmup 0 --budget 25 --min-reps 2"; E_EXTRA="--trials 3 --window 2.0"; fi
 run_one(){  # $1=suite $2=db $3=sf
-  local only; only=$(only_args "$1")
+  local only rc=0; only=$(query_args "$1") || rc=$?
+  [ "$rc" = 1 ] && return 0; [ "$rc" = 0 ] || exit 1
   log "$1 / $3 timing"
   "$PY" -u "$HB_ROOT/lib/run_timing.py" --suite "$1" --db "$2" --sf "$3" --mode gpu --cold \
       $T_EXTRA $only --out "$R/catB_timing.csv" > "$L/catB_t_$1_$3${HB_LOG_TAG}.log" 2>&1

@@ -30,6 +30,7 @@ if [ "$SCOPE" = lite ]; then
     --targets "tpch:$TDB:$TSF:q1,q6;h2o:$HDB:$HSF:q1,q3;clickbench:$CDB:$CSF:q0,q31" \
     --out "$R/catC_grid.csv" > "$L/catC.log" 2>&1
   grep -E '^\[restore\]|^->' "$L/catC.log"
+  echo "lite" > "$R/catC_scope.txt"      # which Cat C this directory holds (lite != repo spec)
   log "done -> $R/catC_grid.csv"; exit 0
 fi
 
@@ -94,4 +95,5 @@ for name, out in (("catA_powersample.csv", "catC_A.csv"), ("catB_timing.csv", "c
             w = csv.DictWriter(f, fieldnames=keys); w.writeheader(); w.writerows(rows)
         print(f"  {out}: {len(rows)} rows")
 PY
+echo "$SCOPE${HB_QUERY_LIMIT:+ (first $HB_QUERY_LIMIT queries per suite)}" > "$R/catC_scope.txt"
 log "done -> $R/catC_A.csv$([ "$SCOPE" = ab ] && echo ", catC_B_timing.csv, catC_B_energy.csv")"
