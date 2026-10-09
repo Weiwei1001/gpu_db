@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Shared pieces for the HeavyDB benchmark: persistent heavysql session + NVML energy counter."""
-import ctypes, os, queue, re, subprocess, threading, time
+import csv, ctypes, os, queue, re, subprocess, threading, time
 import statistics as st
 
 HB_ROOT = os.environ.get("HB_ROOT", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -112,6 +112,8 @@ class Sql:
 
     def run(self, sql, timeout=900):
         stmts = [x.strip() for x in sql.strip().split(";") if x.strip()]
+        if not stmts:
+            raise ValueError("empty SQL")
         Sql._seq += 1
         token = f"HBOK{Sql._seq}"
         for x in stmts:
@@ -146,6 +148,8 @@ class Sql:
     def rows_returned(self, sql, timeout=900):
         """Run once and return the number of result rows (heavysql prints "N rows returned.")."""
         stmts = [x.strip() for x in sql.strip().split(";") if x.strip()]
+        if not stmts:
+            raise ValueError("empty SQL")
         Sql._seq += 1
         token = f"HBROWS{Sql._seq}"
         for x in stmts:
@@ -183,6 +187,8 @@ class Sql:
         diluting E/K.
         """
         stmts = [x.strip() for x in sql.strip().split(";") if x.strip()]
+        if not stmts:
+            raise ValueError("empty SQL")
         Sql._seq += 1
         token = f"HBBURST{Sql._seq}"
         t0 = time.perf_counter()
@@ -364,4 +370,37 @@ def gpu_guard():
 def queries(suite):
     d = os.path.join(HB_ROOT, "queries", suite)
     fs = sorted(os.listdir(d), key=lambda n: int(re.search(r"\d+", n).group()))
-    return [(f[:-4], open(os.path.join(d, f)).read().strip()) for f in fs]
+    qs = [(f[:-4], open(os.path.join(d, f)).read().strip()) for f in fs]
+    empty = [os.path.join(d, n + ".sql") for n, q in qs if not q.strip(" ;\n")]
+    if empty:          # an empty file "runs" in 0 ms and would be recorded as a valid measurement
+        raise SystemExit(f"!! empty query file(s): {', '.join(empty)}")
+    return qs
+
+
+def append_csv(path, rows):
+    """Append rows to a result CSV, matching the columns of the header already in the file.
+
+    A plain DictWriter append writes the new rows in their own key order without checking the header, so a file
+    written by an older version (one column fewer or in a different order) gets every new row shifted. Here
+    rows are written in the file's column order; if they carry a column the file lacks, the file is rewritten
+    with that column added (blank in the old rows).
+    """
+    if not rows:
+        return
+    keys = list(rows[0].keys())
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        with open(path, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=keys); w.writeheader(); w.writerows(rows)
+        return
+    with open(path, newline="") as f:
+        head = next(csv.reader(f), [])
+    if all(k in head for k in keys):
+        with open(path, "a", newline="") as f:
+            csv.DictWriter(f, fieldnames=head, restval="").writerows(rows)
+        return
+    with open(path, newline="") as f:
+        old = list(csv.DictReader(f))
+    cols = head + [k for k in keys if k not in head]
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=cols, restval="")
+        w.writeheader(); w.writerows(old); w.writerows(rows)

@@ -9,12 +9,14 @@ log(){ echo "[$(date +%T)] [catA${HB_LOG_TAG}] $*"; }
 [ "${HB_MODE:-smoke}" = smoke ] && EXTRA="--window 0.5" || EXTRA="--window 2.0"
 screen_once(){  # $1=suite $2=db -- screen each suite only once (result always goes to the main results dir), produces the passlist
   [ -f "$HB_RESULTS_BASE/query_screen_$1.csv" ] && return
+  [ -n "${HB_RERUN:-}" ] && return     # stage 6 re-screens the listed queries itself
   log "dialect screening $1 (database $2)"
   HB_SCREEN_DBS="$1=$2" "$PY" -u "$HB_ROOT/lib/screen_queries.py" "$1" > "$L/screen_$1.log" 2>&1
   grep 'runnable' "$L/screen_$1.log" | head -1
 }
 run_one(){  # $1=suite $2=db $3=sf
-  local only; only=$(only_args "$1")
+  local only rc=0; only=$(query_args "$1") || rc=$?
+  [ "$rc" = 1 ] && return 0; [ "$rc" = 0 ] || exit 1
   log "$1 / $3"
   "$PY" -u "$HB_ROOT/lib/run_powersample.py" --suite "$1" --db "$2" --sf "$3" \
       --reps 3 $EXTRA $only --out "$OUT" --traces "$R/traces" > "$L/catA_$1_$3${HB_LOG_TAG}.log" 2>&1

@@ -27,3 +27,20 @@ only_args(){
   echo "--only $(awk -F, 'NR==1{for(i=1;i<=NF;i++)h[$i]=i; next} $h["ok"]=="True"{print $h["query"]}' "$scr" \
         | sort -V | head -n "$HB_QUERY_LIMIT" | paste -sd,)"
 }
+# rerun_only <suite>: with HB_RERUN="tpch:q14 clickbench:q28" (stage 6), prints the comma-separated queries of this suite that are
+#   listed there AND passed screening (and, in smoke mode, are in SMOKE_ONLY_<suite>); empty output = nothing to rerun for this suite
+rerun_only(){
+  local scr="$HB_RESULTS_BASE/query_screen_$1.csv" want smoke=""
+  want=$(tr ' ' '\n' <<< "$HB_RERUN" | awk -F: -v s="$1" '$1==s{print $2}')
+  [ -n "$want" ] && [ -f "$scr" ] || return 0
+  [ "${HB_MODE:-smoke}" = smoke ] && { local v="SMOKE_ONLY_$1"; smoke="${!v}"; }
+  awk -F, -v want="$(paste -sd, <<< "$want")" -v smoke="$smoke" '
+    NR==1{for(i=1;i<=NF;i++)h[$i]=i; n=split(want,w,","); for(i=1;i<=n;i++)W[w[i]]=1
+          m=split(smoke,s,","); for(i=1;i<=m;i++)S[s[i]]=1; next}
+    $h["ok"]=="True" && ($h["query"] in W) && (smoke=="" || ($h["query"] in S)){print $h["query"]}' "$scr" | paste -sd,
+}
+# query_args <suite>: the --only argument for stages 3/4; returns 1 when this suite has nothing to run (stage-6 rerun of other suites)
+query_args(){
+  if [ -n "${HB_RERUN:-}" ]; then local q; q=$(rerun_only "$1"); [ -n "$q" ] || return 1; echo "--only $q"
+  else only_args "$1" || return 2; fi     # 2 = real error (e.g. missing screening file)
+}

@@ -27,7 +27,7 @@ clickbench,q24,cb_sf1,True,520.0,0.81,
 clickbench,q25,cb_sf1,True,470.0,0.75,
 clickbench,q26,cb_sf1,True,267.0,0.54,
 clickbench,q27,cb_sf1,False,,0.27,"Query requires one or more casts between none-encoded and dictionary-encoded strings, and the estimated table size (1428236 rows) exceeds the configured watchdog none-encoded string translation limit "
-clickbench,q28,cb_sf1,True,,0.28,
+clickbench,q28,cb_sf1,False,,0.24,Aggregate on TEXT is not supported yet.
 clickbench,q29,cb_sf1,True,594.0,0.88,
 clickbench,q30,cb_sf1,True,751.0,1.02,
 clickbench,q31,cb_sf1,True,763.0,1.06,

@@ -123,7 +123,7 @@ for pl in PLS:
                            P_idle_W=round(p_idle, 2), P_load_W=round(E * K / T / 1000, 2),
                            E_total_mJ=round(E, 3),
                            E_dyn_mJ=round(E - p_idle * T / K * 1000, 3),
-                           duty=round(sum(lats) / 1000 / T, 3),
+                           duty=round(sum(lats) / 1000 / sum(Ts), 3),   # lats holds all trials, so divide by all windows
                            cv_pct=round(100 * st.pstdev(Es) / E, 3) if E else "",
                            gpu_checked=gpu, error="")
                 rows.append(row)
@@ -152,11 +152,7 @@ for pl in PLS:
                 if sql:
                     sql.close()
             if rows:                       # write as we go, so the run can be resumed
-                new = not os.path.exists(a.out)
-                with open(a.out, "a", newline="") as f:
-                    w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-                    if new: w.writeheader()
-                    w.writerows(rows[-1:])
+                hb.append_csv(a.out, rows[-1:])
 
 restore(); atexit.unregister(restore)
 print(f"-> {a.out}  took {(time.time()-t_start)/60:.0f} min")
