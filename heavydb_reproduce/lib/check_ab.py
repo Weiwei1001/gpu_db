@@ -22,7 +22,7 @@ def load(path):
 
 
 def main(rdir):
-    missing, failures, flagged, empty = [], [], [], []
+    missing, failures, flagged, empty, unlisted = [], [], [], [], []
     print(f"== Category A/B results in {rdir}")
     for name in FILES:
         p = os.path.join(rdir, name)
@@ -59,8 +59,7 @@ def main(rdir):
             srcp = os.path.join(rdir, "data_sources.csv")
             if os.path.isfile(srcp):
                 have = {r["db"] for r in load(srcp)}
-                for db in sorted({r.get("db", "") for r in rows} - have - {""}):
-                    empty.append(("?", "?", db + " (not in data_sources.csv: its import never finished)"))
+                unlisted = sorted({r.get("db", "") for r in rows} - have - {""})
             for r in rows:
                 try:
                     if float(r.get("E_dyn_mJ") or "nan") < 0:
@@ -76,6 +75,8 @@ def main(rdir):
         print(f"\n== {len(flagged)} Cat A rows with negative E_dyn_mJ (idle baseline above load window)")
         for suite, sf, q, e in flagged:
             print(f"  {suite}/{sf} {q}: E_dyn_mJ={e}")
+    if unlisted:     # a hint only: data_sources.csv may simply be missing or from another run
+        print(f"\n!! warning: not in data_sources.csv (an import that never finished?): {', '.join(unlisted)}")
     if empty:
         print(f"\n!! {len(empty)} dataset(s) look empty -- results on them are meaningless; ./fix_results.sh re-imports and re-measures them")
         for suite, sf, db in dict.fromkeys(empty):

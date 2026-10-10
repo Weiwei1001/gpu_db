@@ -60,7 +60,8 @@ GPU and `--data-dir` as the original run (about 10 min; old CSVs are backed up t
 ./fix_results.sh --gpu 4 --data-dir /bigdisk/hb_repro
 ```
 
-It re-imports every empty dataset and re-measures all of its queries, re-measures the two queries on every SF, and fixes the
+It re-imports every empty dataset and re-measures all of its queries (first checking, before changing anything, that the
+source data is there and the data disk has room, and stopping with a message if not), re-measures the two queries on every SF, and fixes the
 duty column. TPC-H q14 then runs normally; ClickBench q28 fails screening on HeavyDB (`MIN(Referer)`: "Aggregate on TEXT is not supported
 yet", like q21–q23) and is left out. Run Cat C after this repair: the full Cat C reruns Cat A/B with the screening results.
 

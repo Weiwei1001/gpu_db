@@ -18,15 +18,40 @@ BK="$R/backup_$(date +%Y%m%d_%H%M%S)"; mkdir -p "$BK"
 cp "$R"/*.csv "$BK"/
 log "old CSVs backed up to $BK"
 
-# ---------- 1. find and re-import empty datasets ----------
+# ---------- 1. find empty datasets; preflight (source data present, enough disk) before touching anything ----------
 first_db(){ local -n arr=$1; IFS=: read -r _ db _ _ <<< "${arr[0]}"; echo "$db"; }
-REDO="" REDO_SF="" FULL_SCREEN=""
+EMPTY=() NEED_GB=0
 for d in "${TPCH_SETS[@]}" "${H2O_SETS[@]}" "${CB_SETS[@]}"; do
   IFS=: read -r suite db sf param <<< "$d"
   n=$(db_rows "$suite" "$db")
   [ "$n" -gt 0 ] && continue
-  log "$db is $([ "$n" = -1 ] && echo missing || echo empty); re-importing"
-  "$PY" "$HB_ROOT/lib/gen_data.py" "$suite" "$db" "$param" "$sf"
+  read -r _ src bytes < <(HB_DISCOVER_ONLY=1 "$PY" "$HB_ROOT/lib/gen_data.py" "$suite" "$db" "$param" "$sf")
+  gb=$(( (bytes + 999999999) / 1000000000 ))
+  if [ "$src" = generate ]; then
+    [ "$suite" = clickbench ] && note="will download/sample hits.parquet" || note="no source data found, will be GENERATED"
+    [ "$suite" = h2o ] && note="$note (H2O generator has no seed: rows will differ from the other engines' data)"
+    gb=$(( ${param%%.*} / 15000000 + 1 ))             # rough size of generated data
+  else note="source $src (${gb} GB)"; fi
+  log "$db is $([ "$n" = -1 ] && echo missing || echo empty) -> will re-import; $note"
+  NEED_GB=$(( NEED_GB + 2 * gb + 2 ))                  # parquet temp file + HeavyDB storage
+  EMPTY+=("$d")
+done
+if [ ${#EMPTY[@]} -gt 0 ]; then
+  DD="${HB_DATA_DIR:-$HEAVYDB_HOME/build}"
+  FREE=$(df -BG --output=avail "$DD" | tail -1 | tr -dc 0-9)
+  log "preflight: about $NEED_GB GB needed for the re-import, $FREE GB free on $DD"
+  if [ "$FREE" -lt "$NEED_GB" ]; then
+    log "!! not enough disk on $DD for the re-import (an import that runs out of disk is what leaves an empty database)."
+    log "!! free some space or pass --data-dir on a bigger disk; nothing has been changed"; exit 1
+  fi
+fi
+REDO="" REDO_SF="" FULL_SCREEN=""
+for d in "${EMPTY[@]}"; do
+  IFS=: read -r suite db sf param <<< "$d"
+  log "re-importing $db"
+  if ! "$PY" "$HB_ROOT/lib/gen_data.py" "$suite" "$db" "$param" "$sf"; then
+    log "!! re-import of $db failed (see the message above); old CSVs are untouched, backup in $BK"; exit 1
+  fi
   REDO="$REDO $db"
   case "$suite" in tpch) fam="tpch case_bench";; h2o) fam="h2o";; *) fam="clickbench clickbench_approx";; esac
   for s in $fam; do REDO_SF="$REDO_SF $s:$sf"; done

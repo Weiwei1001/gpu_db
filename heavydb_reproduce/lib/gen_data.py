@@ -115,6 +115,17 @@ def cb_source_sql(src):
             sel.append(f"CAST({c} AS {t}) AS {c}")
     return f"SELECT {', '.join(sel)} FROM {src}"
 
+# ---------- Preflight only (stage 6): where would the data come from, how big is it ----------
+if os.environ.get("HB_DISCOVER_ONLY") == "1":
+    found = discover()
+    if not found:
+        print("SOURCE generate 0")
+    else:
+        path, kind = found
+        files = glob.glob(os.path.join(os.path.dirname(path), "*.csv")) if kind == "csvdir" else [path]
+        print(f"SOURCE {path} {sum(os.path.getsize(f) for f in files)}")
+    sys.exit(0)
+
 # ---------- Main flow ----------
 t0 = time.time()
 con = duckdb.connect(":memory:")
