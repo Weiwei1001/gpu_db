@@ -2,8 +2,10 @@
 # Repair existing full-mode results in place (stage 6), on a machine where ./run_ab.sh has already finished:
 #   - TPC-H q14 and ClickBench q28: their query files were empty before this fix, so every row for them is a
 #     0 ms "measurement" of nothing; they are re-screened and re-measured (Cat A + B, all SFs)
+#   - empty datasets: a database whose import died halfway (stage 2 used to skip it because it existed) is re-imported
+#     and every query on it re-measured
 #   - catC_grid.csv (Cat C lite): the duty column was 3x too large; corrected in place (energies were not affected)
-# Build and data import are skipped. Old CSVs are backed up to results/full/<gpu>/backup_<time>/. About 10 min.
+# Build is skipped. Old CSVs are backed up to results/full/<gpu>/backup_<time>/. About 10 min, plus about 30 min per re-imported dataset.
 #
 #   ./fix_results.sh --gpu 0                                  # same GPU as the run_ab.sh run
 #   ./fix_results.sh --gpu 0 --data-dir /bigdisk/hb_repro     # same --data-dir as the run_ab.sh run

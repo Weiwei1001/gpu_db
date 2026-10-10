@@ -44,3 +44,21 @@ query_args(){
   if [ -n "${HB_RERUN:-}" ]; then local q; q=$(rerun_only "$1"); [ -n "$q" ] || return 1; echo "--only $q"
   else only_args "$1" || return 2; fi     # 2 = real error (e.g. missing screening file)
 }
+# db_rows <suite> <db>: row count of the dataset's main table (lineitem / groupby / t, the last one imported);
+#   -1 = database does not exist, 0 = exists but empty / table missing (an import that died halfway)
+db_rows(){
+  local t; case "$1" in tpch) t=lineitem;; h2o) t=groupby;; *) t=t;; esac
+  "$HB_ROOT/lib/hsql" heavyai "\l" 2>/dev/null | grep -q "^$2 |" || { echo -1; return; }
+  local n; n=$("$HB_ROOT/lib/hsql" "$2" "SELECT COUNT(*) FROM $t;" 2>/dev/null | head -1 | tr -dc 0-9)
+  echo "${n:-0}"
+}
+# HB_ONLY_DBS / HB_SKIP_DBS (space-separated db names): restrict which datasets stages 3/4 run on (used by stage 6)
+_filter_sets(){
+  local -n arr=$1; local keep=() d db
+  for d in "${arr[@]}"; do IFS=: read -r _ db _ _ <<< "$d"
+    [ -n "${HB_ONLY_DBS:-}" ] && [[ " $HB_ONLY_DBS " != *" $db "* ]] && continue
+    [[ " ${HB_SKIP_DBS:-} " == *" $db "* ]] && continue
+    keep+=("$d"); done
+  arr=("${keep[@]}")
+}
+if [ -n "${HB_ONLY_DBS:-}${HB_SKIP_DBS:-}" ]; then _filter_sets TPCH_SETS; _filter_sets H2O_SETS; _filter_sets CB_SETS; fi

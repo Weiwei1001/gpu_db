@@ -183,7 +183,13 @@ for name, q in qs:
         break
 
 smp.stop.set(); smp.join(); sql.close()
-with open(os.path.join(a.traces, f"{a.suite}_{a.sf}.json"), "w") as f:
+tpath = os.path.join(a.traces, f"{a.suite}_{a.sf}.json")
+if a.only and os.path.exists(tpath):     # partial rerun: keep the other queries' traces
+    try:
+        traces = {**json.load(open(tpath)).get("traces", {}), **traces}
+    except ValueError:
+        pass
+with open(tpath, "w") as f:
     json.dump(dict(suite=a.suite, sf=a.sf, gpus=hb.GPUS, sample_dt_s=SAMPLE_DT,
                    p_idle_W=p_idle, traces=traces), f)
 dump()
