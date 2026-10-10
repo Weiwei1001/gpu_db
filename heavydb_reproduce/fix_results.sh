@@ -3,7 +3,8 @@
 #   - TPC-H q14 and ClickBench q28: their query files were empty before this fix, so every row for them is a
 #     0 ms "measurement" of nothing; they are re-screened and re-measured (Cat A + B, all SFs)
 #   - empty datasets: a database whose import died halfway (stage 2 used to skip it because it existed) is re-imported
-#     and every query on it re-measured
+#     and every query on it re-measured; before anything is changed it checks that the source data is found and that
+#     the data disk has room, and stops with a message if not
 #   - catC_grid.csv (Cat C lite): the duty column was 3x too large; corrected in place (energies were not affected)
 # Build is skipped. Old CSVs are backed up to results/full/<gpu>/backup_<time>/. About 10 min, plus about 30 min per re-imported dataset.
 #
