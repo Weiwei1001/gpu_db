@@ -1,8 +1,8 @@
 #!/bin/bash
 # One-shot full run: auto-pick an idle GPU → check sudo/disk → auto-discover existing data (generate/download if missing) → build (if needed) → Cat A/B/C
 #
-#   ./run_full.sh                                  # all defaults: A + B + Cat C lite (6 representative queries), about 5.5 h on a single H100
-#   ./run_full.sh --catc-scope ab                  # Cat C per repo spec (rerun A+B at every grid point, about 4–5 days)
+#   ./run_full.sh                                  # all defaults: A + B + Cat C per repo spec (rerun A+B at every grid point), about 5 days on a single H100
+#   ./run_full.sh --catc-scope lite                # Cat C lite instead (6 representative queries, about 25 min)
 #   ./run_full.sh --data-roots /path/gpu_db:/path/other --data-dir /bigdisk/hb_repro
 #
 #   One command from an existing gpu_db checkout (reuses its tests/ data):
@@ -17,14 +17,14 @@
 #   --data-roots A:B   search roots for existing data (tests/ dirs, csv-*/, *.duckdb, hits.parquet left by earlier gpu_db runs)
 #                      checked by default: --data-dir, ~/gpu_db, a gpu_db next to this package
 #   --data-dir DIR     directory for HeavyDB databases and temp files (full run about 70 GB; default data/ under this package; warns if space is short)
-#   --catc-scope S     Cat C scope: lite (default) | a | ab; see reproduce.sh
+#   --catc-scope S     Cat C scope: ab (default, repo spec) | a | lite; see reproduce.sh
 #   --stages "1 2 3 4" run only the listed stages (passed through to reproduce.sh; default all 5)
 #   --dry-run          only do GPU/disk/data discovery, then exit
 #   any other arguments are passed through to reproduce.sh (--skip-build, --heavydb-home, --catc-limit ...)
 set -euo pipefail
 HB_ROOT="$(cd "$(dirname "$0")" && pwd)"
 log(){ echo "[$(date +%T)] [full] $*"; }
-GPU="" DATA_DIR="$HB_ROOT/data" ROOTS="" CATC_SCOPE="lite" STAGES="1 2 3 4 5" DRY=0 PASS=()
+GPU="" DATA_DIR="$HB_ROOT/data" ROOTS="" CATC_SCOPE="ab" STAGES="1 2 3 4 5" DRY=0 PASS=()
 while [ $# -gt 0 ]; do case "$1" in
   --gpu) GPU="$2"; shift 2;; --data-roots) ROOTS="$2"; shift 2;; --data-dir) DATA_DIR="$2"; shift 2;;
   --catc-scope) CATC_SCOPE="$2"; shift 2;; --stages) STAGES="$2"; PASS+=("$1" "$2"); shift 2;; --dry-run) DRY=1; shift;;
@@ -68,6 +68,6 @@ done
 [ "$found" -gt 0 ] && log "found $found items; matching datasets are imported directly, the rest are generated/downloaded" || log "no existing data found; everything will be generated/downloaded (ClickBench needs access to datasets.clickhouse.com)"
 
 # ---------- Run ----------
-[[ " $STAGES " == *" 5 "* ]] && log "Cat C scope: $CATC_SCOPE (lite about 25 min; ab about 4–5 days, select with --catc-scope ab)" || log "stages $STAGES only (no Cat C)"
+[[ " $STAGES " == *" 5 "* ]] && log "Cat C scope: $CATC_SCOPE (ab = repo spec, about 4–5 days; --catc-scope lite for the 25 min version)" || log "stages $STAGES only (no Cat C)"
 [ "$DRY" = 1 ] && { log "--dry-run: stopping here, nothing built or run"; exit 0; }
 exec "$HB_ROOT/reproduce.sh" --gpu "$GPU" --full --data-dir "$DATA_DIR" --catc-scope "$CATC_SCOPE" "${PASS[@]}"

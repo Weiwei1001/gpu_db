@@ -2,13 +2,13 @@
 # Category C only (stage 5: power limit x SM clock grid), on a machine where ./run_ab.sh has already finished.
 # Build and data import are skipped; the existing heavydb build and databases are reused.
 #
-#   ./run_c.sh --gpu 4                             # Cat C lite (6 representative queries, about 25 min)
-#   ./run_c.sh --gpu 4 --catc-scope ab --catc-limit 1    # 1 query per benchmark x SF at every grid point (about 7 h)
-#   ./run_c.sh --gpu 4 --catc-scope ab             # repo spec: rerun A + B at every grid point (about 4-5 days)
+#   ./run_c.sh --gpu 4                             # repo spec (default): rerun A + B at every grid point (about 4-5 days)
+#   ./run_c.sh --gpu 4 --catc-limit 1              # 1 query per benchmark x SF at every grid point (about 7 h)
+#   ./run_c.sh --gpu 4 --catc-scope lite           # Cat C lite (6 representative queries, about 25 min)
 #   ./run_c.sh --gpu 4 --data-dir /bigdisk/hb_repro      # same --data-dir as the run_ab.sh run (the databases live there)
 #
 # Options: --gpu N (required: Cat C must use the GPU the A/B results were measured on; the results directory is keyed by GPU model),
-#   --data-dir DIR (must match run_ab.sh), --catc-scope lite|a|ab, --catc-limit N, --no-check (start even without A/B results),
+#   --data-dir DIR (must match run_ab.sh), --catc-scope ab|a|lite (default ab), --catc-limit N, --no-check (start even without A/B results),
 #   --dry-run, and any other reproduce.sh option (--heavydb-home ...). Needs passwordless sudo for nvidia-smi power/clock changes.
 # Before starting, the A/B results of this GPU model are checked with lib/check_ab.py; missing results abort (override with --no-check).
 set -euo pipefail

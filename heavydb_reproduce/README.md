@@ -12,13 +12,13 @@ git pull && heavydb_reproduce/run_full.sh
 On a fresh machine: `git clone https://github.com/Weiwei1001/gpu_db.git && gpu_db/heavydb_reproduce/run_full.sh`.
 
 It picks an idle GPU, builds HeavyDB, imports the data (generates or downloads whatever is missing, about 70 GB),
-and runs Category A, B, and C-lite. About 5.5 h on one H100 when the data is already there. Results land in
+and runs Category A, B, and C (repo spec). Cat A+B take about 4.5 h on one H100 when the data is already there; Cat C about 4–5 days. Results land in
 `heavydb_reproduce/results/full/<gpu-model>/` (one directory per GPU model, so A100 and H100 runs do not mix). `--dry-run` shows the chosen GPU and the data it found without building anything;
-`--data-dir /bigdisk/x` if the root disk is small; `--catc-scope ab` for the full 4–5 day Category C grid.
+`--data-dir /bigdisk/x` if the root disk is small; `--catc-scope lite` for a 25 min Category C on 6 representative queries.
 
 ```bash
-./run_full.sh                                  # one-shot full run: auto-pick an idle GPU, auto-find existing data, build, Cat A/B + C lite (default)
-./run_full.sh --catc-scope ab --data-dir /bigdisk/hb_repro --data-roots /path/to/gpu_db   # Cat C per repo spec
+./run_full.sh                                  # one-shot full run: auto-pick an idle GPU, auto-find existing data, build, Cat A/B + C (repo spec)
+./run_full.sh --catc-scope lite --data-dir /bigdisk/hb_repro --data-roots /path/to/gpu_db   # Cat C lite instead
 ./reproduce.sh --gpu 4 --smoke                 # end-to-end check on tiny data (about 10 min, excluding compilation)
 ./reproduce.sh --gpu 4 --full --data-dir /data/$USER/hb_repro   # full: A+B about 4.5 h; Cat C defaults to the repo spec (see below)
 ./reproduce.sh --gpu 4 --full --catc-scope ab --catc-limit 1      # Cat C test: only 1 query per benchmark×SF (about 7 h)
@@ -36,29 +36,32 @@ The Cat C grid reruns A (and B) at 25 power/clock points, so it is worth checkin
 ./run_ab.sh --gpu 4 --data-dir /bigdisk/hb_repro      # stages 1–4 only: build, data, Cat A, Cat B (about 3.5 h on one H100 with data present)
 #   ... ends with a check of catA_powersample.csv / catB_timing.csv / catB_energy.csv (rows per suite×SF, failed queries,
 #   Cat A rows with negative E_dyn_mJ) and prints the matching run_c.sh commands
-./run_c.sh --gpu 4 --data-dir /bigdisk/hb_repro                                  # stage 5 only, Cat C lite (about 25 min)
-./run_c.sh --gpu 4 --data-dir /bigdisk/hb_repro --catc-scope ab --catc-limit 1   # Cat C test, 1 query per benchmark×SF (about 7 h)
-./run_c.sh --gpu 4 --data-dir /bigdisk/hb_repro --catc-scope ab                  # Cat C per repo spec (about 4–5 days)
+./run_c.sh --gpu 4 --data-dir /bigdisk/hb_repro                                  # stage 5 only, Cat C per repo spec (about 4–5 days)
+./run_c.sh --gpu 4 --data-dir /bigdisk/hb_repro --catc-limit 1                   # Cat C test, 1 query per benchmark×SF (about 7 h)
+./run_c.sh --gpu 4 --data-dir /bigdisk/hb_repro --catc-scope lite                # Cat C lite, 6 representative queries (about 25 min)
 ```
 
 `run_c.sh` skips build and data, requires `--gpu` (results are keyed by GPU model, so it must be the GPU the A/B results came from),
 needs the same `--data-dir` (the databases live there), and refuses to start when the A/B result files for that GPU model are missing
 (`--no-check` overrides). `python lib/check_ab.py results/full/<gpu-model>` runs the same check by hand at any time.
-`run_c.sh` (and `run_full.sh`) default to **Cat C lite**, not the repo spec; pass `--catc-scope ab` for the spec version.
-Stage 5 writes `catC_scope.txt` into the results directory saying which one it ran.
+Since 2026-10-09 every entry point defaults to the repo-spec Cat C (`--catc-scope ab`); before that `run_full.sh` and
+`run_c.sh` defaulted to lite. Stage 5 writes `catC_scope.txt` into the results directory saying which one it ran.
 
 ### Repairing results from before 2026-10-09
 
 Until 2026-10-09 `queries/tpch/q14.sql` and `queries/clickbench/q28.sql` were empty (the SQL extractor missed their
 `\"...\"` quoting), so every row for those two queries is a 0 ms measurement of nothing, and `catC_grid.csv` (Cat C lite)
-had a `duty` column 3x too large (energies were not affected). After `git pull`, repair an existing run in place, on the same
+had a `duty` column 3x too large (energies were not affected). Stage 2 also skipped any database that existed, so an import
+that died halfway left an empty one that was then measured as if it were data (every query returning 0 rows in a few ms;
+`check_ab.py` now reports this). After `git pull`, repair an existing run in place, on the same
 GPU and `--data-dir` as the original run (about 10 min; old CSVs are backed up to `results/full/<gpu>/backup_<time>/`):
 
 ```bash
 ./fix_results.sh --gpu 4 --data-dir /bigdisk/hb_repro
 ```
 
-TPC-H q14 then runs normally; ClickBench q28 fails screening on HeavyDB (`MIN(Referer)`: "Aggregate on TEXT is not supported
+It re-imports every empty dataset and re-measures all of its queries, re-measures the two queries on every SF, and fixes the
+duty column. TPC-H q14 then runs normally; ClickBench q28 fails screening on HeavyDB (`MIN(Referer)`: "Aggregate on TEXT is not supported
 yet", like q21–q23) and is left out. Run Cat C after this repair: the full Cat C reruns Cat A/B with the screening results.
 
 ## Stages
@@ -75,9 +78,9 @@ yet", like q21–q23) and is left out. Run Cat C after this repair: the full Cat
 
 | Option | Meaning | Full-run time (single H100) |
 |---|---|---|
-| `--catc-scope ab` (`reproduce.sh` default) | rerun A + B at every grid point (repo spec) | about 4–5 days |
+| `--catc-scope ab` (default everywhere) | rerun A + B at every grid point (repo spec) | about 4–5 days |
 | `--catc-scope a` | rerun only A at every grid point | about 1 day |
-| `--catc-scope lite` (`run_full.sh` default) | 6 representative queries (tpch q1/q6, h2o q1/q3, clickbench q0/q31) | about 25 min |
+| `--catc-scope lite` | 6 representative queries (tpch q1/q6, h2o q1/q3, clickbench q0/q31) | about 25 min |
 | `--catc-limit N` | with ab/a: only the first N queries per benchmark×SF that passed screening (for testing) | N=1, ab: about 7 h |
 
 **Automatic data discovery (full mode)**: when someone has already run the gpu_db Maximus/Sirius benchmarks, the data is usually on the machine. Stage 2 looks under

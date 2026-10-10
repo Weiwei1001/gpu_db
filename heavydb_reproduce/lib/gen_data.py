@@ -202,12 +202,14 @@ else:
     imp("t", p)
     nrows = hsql(db, "SELECT COUNT(*) FROM t;").split("\n")[0]
 
+if not nrows.isdigit() or int(nrows) == 0:
+    sys.exit(f"!! {db}: import finished but the table has {nrows!r} rows")
 os.makedirs(RESULTS, exist_ok=True)
 log = os.path.join(RESULTS, "data_sources.csv")
-new = not os.path.exists(log)
-with open(log, "a", newline="") as f:
+old = [r for r in csv.reader(open(log))][1:] if os.path.exists(log) else []
+with open(log, "w", newline="") as f:
     w = csv.writer(f)
-    if new:
-        w.writerow(["db", "suite", "sf", "rows", "source"])
+    w.writerow(["db", "suite", "sf", "rows", "source"])
+    w.writerows(r for r in old if r and r[0] != db)       # a re-import replaces the old entry
     w.writerow([db, suite, sf, nrows, source])
 print(f"  {db}: {nrows} rows, {time.time()-t0:.0f}s  <- {source}", flush=True)

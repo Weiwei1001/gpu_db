@@ -42,6 +42,6 @@ echo
 "$PYBIN" "$HB_ROOT/lib/check_ab.py" "$RDIR" || exit 1
 echo
 log "next step, Category C on the same GPU and data (both must match this run):"
-log "    $HB_ROOT/run_c.sh --gpu $GPU${DATA_DIR:+ --data-dir $DATA_DIR}                  # lite: 6 representative queries, about 25 min"
-log "    $HB_ROOT/run_c.sh --gpu $GPU${DATA_DIR:+ --data-dir $DATA_DIR} --catc-scope ab --catc-limit 1   # 1 query per benchmark x SF, about 7 h"
-log "    $HB_ROOT/run_c.sh --gpu $GPU${DATA_DIR:+ --data-dir $DATA_DIR} --catc-scope ab   # repo spec, about 4-5 days"
+log "    $HB_ROOT/run_c.sh --gpu $GPU${DATA_DIR:+ --data-dir $DATA_DIR}                     # repo spec (default), about 4-5 days"
+log "    $HB_ROOT/run_c.sh --gpu $GPU${DATA_DIR:+ --data-dir $DATA_DIR} --catc-limit 1      # test: 1 query per benchmark x SF, about 7 h"
+log "    $HB_ROOT/run_c.sh --gpu $GPU${DATA_DIR:+ --data-dir $DATA_DIR} --catc-scope lite   # lite: 6 representative queries, about 25 min"

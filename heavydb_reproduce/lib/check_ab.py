@@ -22,7 +22,7 @@ def load(path):
 
 
 def main(rdir):
-    missing, failures, flagged = [], [], []
+    missing, failures, flagged, empty = [], [], [], []
     print(f"== Category A/B results in {rdir}")
     for name in FILES:
         p = os.path.join(rdir, name)
@@ -48,6 +48,19 @@ def main(rdir):
         # Cat A runs with the data already on the GPU, so a negative dynamic energy there means the
         # idle baseline was higher than the load window: worth a look before spending days on Cat C.
         if name == "catA_powersample.csv":
+            # every query returning 0 rows on one dataset = the table is empty (an import that died halfway)
+            okrows = defaultdict(list)
+            for r in rows:
+                if not (r.get("error") or "").strip():
+                    okrows[(r["suite"], r["sf"], r.get("db", ""))].append(r)
+            for (suite, sf, db), rs in sorted(okrows.items()):
+                if len(rs) >= 3 and all((r.get("n_rows") or "0") in ("0", "0.0") for r in rs):
+                    empty.append((suite, sf, db))
+            srcp = os.path.join(rdir, "data_sources.csv")
+            if os.path.isfile(srcp):
+                have = {r["db"] for r in load(srcp)}
+                for db in sorted({r.get("db", "") for r in rows} - have - {""}):
+                    empty.append(("?", "?", db + " (not in data_sources.csv: its import never finished)"))
             for r in rows:
                 try:
                     if float(r.get("E_dyn_mJ") or "nan") < 0:
@@ -63,6 +76,11 @@ def main(rdir):
         print(f"\n== {len(flagged)} Cat A rows with negative E_dyn_mJ (idle baseline above load window)")
         for suite, sf, q, e in flagged:
             print(f"  {suite}/{sf} {q}: E_dyn_mJ={e}")
+    if empty:
+        print(f"\n!! {len(empty)} dataset(s) look empty -- results on them are meaningless; ./fix_results.sh re-imports and re-measures them")
+        for suite, sf, db in dict.fromkeys(empty):
+            print(f"  {suite}/{sf} {db}")
+        return 1
     if missing:
         print(f"\n!! incomplete: {', '.join(missing)} -- rerun run_ab.sh (finished parts are skipped) before Category C")
         return 1

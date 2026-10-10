@@ -6,9 +6,9 @@ source "$HB_ROOT/lib/datasets.sh"
 log(){ echo "[$(date +%T)] [data] $*"; }
 for d in "${TPCH_SETS[@]}" "${H2O_SETS[@]}" "${CB_SETS[@]}"; do
   IFS=: read -r suite db sf param <<< "$d"
-  if "$HB_ROOT/lib/hsql" heavyai "\l" 2>/dev/null | grep -q "^$db |"; then
-    log "$db already exists, skipping"; continue
-  fi
+  n=$(db_rows "$suite" "$db")
+  if [ "$n" -gt 0 ]; then log "$db already exists ($n rows), skipping"; continue; fi
+  [ "$n" = 0 ] && log "$db exists but its main table is empty or missing (an earlier import failed?); re-importing"
   log "preparing $suite/$sf -> $db"
   "$PY" "$HB_ROOT/lib/gen_data.py" "$suite" "$db" "$param" "$sf"
 done
