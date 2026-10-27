@@ -5,9 +5,9 @@ if [ "${HB_MODE:-smoke}" = "smoke" ]; then
   H2O_SETS=("h2o:h2o_smoke:smoke:200000")             # 200k rows
   CB_SETS=("clickbench:cb_smoke:smoke:0.02")          # remote sample 0.02% (about 20k rows)
 else
-  TPCH_SETS=(); for sf in ${HB_SFS_TPCH:-1 5 10 20}; do TPCH_SETS+=("tpch:tpch_sf$sf:sf$sf:$sf"); done
-  H2O_SETS=(); for g in ${HB_SFS_H2O:-1 2 4 8}; do H2O_SETS+=("h2o:h2o_${g}gb:${g}gb:$((g*35000000))"); done
-  CB_SETS=();  for sf in ${HB_SFS_CB:-1 5 10 20}; do CB_SETS+=("clickbench:cb_sf$sf:sf$sf:$(python3 -c "print(100.0*$sf/70)")"); done
+  TPCH_SETS=(); for sf in ${HB_SFS_TPCH-1 5 10 20}; do TPCH_SETS+=("tpch:tpch_sf$sf:sf$sf:$sf"); done
+  H2O_SETS=(); for g in ${HB_SFS_H2O-1 2 4 8}; do H2O_SETS+=("h2o:h2o_${g}gb:${g}gb:$((g*35000000))"); done
+  CB_SETS=();  for sf in ${HB_SFS_CB-1 5 10 20}; do CB_SETS+=("clickbench:cb_sf$sf:sf$sf:$(python3 -c "print(100.0*$sf/70)")"); done
 fi
 # in smoke mode each suite runs only these queries (one each of scan / aggregate / join / large result set / approximate distinct)
 SMOKE_ONLY_tpch="q1,q6"; SMOKE_ONLY_case_bench="q1,q5"; SMOKE_ONLY_h2o="q1,q3"

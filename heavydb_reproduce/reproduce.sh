@@ -19,7 +19,7 @@
 #   --catc-limit N      Category C: run only the first N queries per benchmark×SF (for testing, e.g. 1)
 #   --data-dir DIR      put HeavyDB database files and import temp files here (default: under the heavydb build dir; full is about 70 GB,
 #                       point it at a big disk if the root disk is too small, e.g. --data-dir /data/$USER/hb_repro)
-# Environment variables: HB_SFS_TPCH="1 10" HB_SFS_H2O="1 4" HB_SFS_CB="1 10" shrink the SF list in full mode;
+# Environment variables: HB_SFS_TPCH="1 10" HB_SFS_H2O="1 4" HB_SFS_CB="1 10" shrink the SF list in full mode (set one to "" to skip that benchmark);
 #           HB_FORCE_RESTART=1 allows stopping other heavydb instances; HB_IGNORE_BUSY=1 skips the GPU-busy check.
 set -euo pipefail
 export HB_ROOT="$(cd "$(dirname "$0")" && pwd)"
