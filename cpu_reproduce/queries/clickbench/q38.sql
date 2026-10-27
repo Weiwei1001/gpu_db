@@ -1,0 +1,2 @@
+-- ClickBench q38 (rewrite: EventDate → EventTime range for GPU)
+SELECT URL, COUNT(*) AS PageViews FROM t WHERE CounterID = 62 AND EventTime >= 1372636800 AND EventTime <= 1375315199 AND IsRefresh = 0 AND IsLink <> 0 AND IsDownload = 0 GROUP BY URL ORDER BY PageViews DESC LIMIT 10 OFFSET 1000;

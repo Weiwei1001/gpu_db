@@ -1,0 +1,2 @@
+-- ClickBench q4
+SELECT COUNT(DISTINCT UserID) FROM t;

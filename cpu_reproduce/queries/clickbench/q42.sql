@@ -1,0 +1,2 @@
+-- ClickBench q42 (rewrite: DATE_TRUNC+to_timestamp → integer arithmetic, EventDate → EventTime for GPU)
+SELECT CAST(EventTime/60 AS INTEGER)*60 AS M, COUNT(*) AS PageViews FROM t WHERE CounterID = 62 AND EventTime >= 1373760000 AND EventTime <= 1373932799 AND IsRefresh = 0 AND DontCountHits = 0 GROUP BY M ORDER BY M LIMIT 10 OFFSET 1000;

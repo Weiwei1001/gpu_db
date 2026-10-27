@@ -1,0 +1,2 @@
+-- ClickBench q9
+SELECT RegionID, SUM(AdvEngineID), COUNT(*) AS c, AVG(ResolutionWidth), COUNT(DISTINCT UserID) FROM t GROUP BY RegionID ORDER BY c DESC LIMIT 10;

@@ -1,0 +1,2 @@
+-- ClickBench q36 (rewrite: EventDate USMALLINT → EventTime BIGINT range for GPU)
+SELECT URL, COUNT(*) AS PageViews FROM t WHERE CounterID = 62 AND EventTime >= 1372636800 AND EventTime <= 1375315199 AND DontCountHits = 0 AND IsRefresh = 0 AND URL <> '' GROUP BY URL ORDER BY PageViews DESC LIMIT 10;
