@@ -1,0 +1,1 @@
+SELECT COUNT(*) FROM groupby WHERE id4 > 50;

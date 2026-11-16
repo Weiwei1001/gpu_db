@@ -1,0 +1,1 @@
+SELECT v3 FROM groupby ORDER BY v3;

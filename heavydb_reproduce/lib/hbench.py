@@ -172,11 +172,54 @@ class Sql:
                         break
                 return n if n is not None else 0
 
-    @staticmethod
-    def count_wrap(sql):
-        """Wrap in COUNT(*): the inner scan/aggregation still runs, but the huge result set is not sent back to the client."""
+    def _lines(self, sql, timeout=900):
+        """Run one statement and return the output lines printed before the sentinel."""
+        Sql._seq += 1
+        token = f"HBLINES{Sql._seq}"
+        self._w(sql.strip().rstrip(";").replace("\n", " ") + ";")
+        self._w(f"SELECT '{token}';")
+        out, deadline = [], time.time() + timeout
+        while True:
+            line = self._get(deadline)
+            if line == "":
+                raise TimeoutError(f"{timeout}s timeout")
+            if line is None:
+                raise RuntimeError("server has exited")
+            if token in line:
+                while True:
+                    l2 = self._get(time.time() + 5)
+                    if not l2 or self.TIMING.search(l2):
+                        break
+                return out
+            out.append(line.rstrip("\n"))
+
+    def count_rows(self, sql, timeout=900):
+        """Number of result rows, counted on the server (SELECT COUNT(*) FROM (q)): unlike rows_returned() the
+        result set is never sent to the client, which matters for a full sort of 280M rows."""
+        out = self._lines(Sql.count_wrap(sql), timeout)
+        nums = [l.strip() for l in out if re.fullmatch(r"\d+", l.strip())]
+        if not nums:
+            msg = next((l.strip() for l in reversed(out) if l.strip() and not self.TIMING.search(l)), "no output")
+            raise RuntimeError(msg[:200])
+        return int(nums[0])
+
+    def explain(self, sql, timeout=300):
+        """Calcite plan of the (last) statement, as text."""
         stmts = [x.strip() for x in sql.strip().split(";") if x.strip()]
-        stmts[-1] = f"SELECT COUNT(*) FROM ({stmts[-1]}) AS _hb_wrap"
+        return "\n".join(self._lines("EXPLAIN CALCITE " + stmts[-1], timeout))
+
+    @staticmethod
+    def count_wrap(sql, keep_sort_rows=None):
+        """Wrap in COUNT(*): the inner scan/aggregation still runs, but the huge result set is not sent back to the client.
+
+        Calcite drops an ORDER BY without LIMIT inside a subquery, so the wrapped query would no longer sort.
+        With keep_sort_rows=N such an ORDER BY gets LIMIT N (N = the full row count): the result is unchanged
+        and the sort stays in the plan."""
+        stmts = [x.strip() for x in sql.strip().split(";") if x.strip()]
+        last = stmts[-1]
+        if keep_sort_rows and re.search(r"\border\s+by\b", last, re.I) and not re.search(r"\blimit\s+\d+\s*$", last, re.I):
+            last = f"{last} LIMIT {int(keep_sort_rows)}"
+        stmts[-1] = f"SELECT COUNT(*) FROM ({last}) AS _hb_wrap"
         return "; ".join(stmts) + ";"
 
     def run_burst(self, sql, k, timeout=1800):
@@ -369,7 +412,8 @@ def gpu_guard():
 
 def queries(suite):
     d = os.path.join(HB_ROOT, "queries", suite)
-    fs = sorted(os.listdir(d), key=lambda n: int(re.search(r"\d+", n).group()))
+    fs = sorted((f for f in os.listdir(d) if f.endswith(".sql")),       # microbench ids (w1_002, w5a_029) share the first number
+                key=lambda n: (int(re.search(r"\d+", n).group()), n))
     qs = [(f[:-4], open(os.path.join(d, f)).read().strip()) for f in fs]
     empty = [os.path.join(d, n + ".sql") for n, q in qs if not q.strip(" ;\n")]
     if empty:          # an empty file "runs" in 0 ms and would be recorded as a valid measurement

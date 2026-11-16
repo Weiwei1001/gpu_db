@@ -1,0 +1,1 @@
+SELECT id1, v3 FROM groupby ORDER BY v3 DESC LIMIT 10;

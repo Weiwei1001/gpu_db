@@ -1,0 +1,1 @@
+SELECT AdvEngineID, COUNT(*) FROM t GROUP BY AdvEngineID;

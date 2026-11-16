@@ -1,0 +1,1 @@
+SELECT SUM(GoodEvent) FROM t WHERE CounterID > 10000 AND RegionID > 100;

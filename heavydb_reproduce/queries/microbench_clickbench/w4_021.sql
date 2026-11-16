@@ -1,0 +1,1 @@
+SELECT CounterID, COUNT(*) FROM t GROUP BY CounterID;

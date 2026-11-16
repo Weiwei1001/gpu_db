@@ -12,6 +12,8 @@ fi
 # in smoke mode each suite runs only these queries (one each of scan / aggregate / join / large result set / approximate distinct)
 SMOKE_ONLY_tpch="q1,q6"; SMOKE_ONLY_case_bench="q1,q5"; SMOKE_ONLY_h2o="q1,q3"
 SMOKE_ONLY_clickbench="q0,q31"; SMOKE_ONLY_clickbench_approx="q4,q13"
+SMOKE_ONLY_microbench_tpch="w1_002,w5a_029,w6_060"; SMOKE_ONLY_microbench_h2o="w1_001,w4_027,w6_034"   # scan, join/group-by, full sort
+SMOKE_ONLY_microbench_clickbench="w1_001,w4_022,w6_016"
 
 # Shared by all stages: this run's output dir / log suffix / query subset. Cat C points them at its own subdirectory at every grid point.
 HB_RESULTS_BASE="${HB_RESULTS_BASE:-$HB_ROOT/results/${HB_MODE:-smoke}}"   # per mode: results/smoke, results/full

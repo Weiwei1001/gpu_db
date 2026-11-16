@@ -10,7 +10,7 @@
 #   --smoke | --full    data scale (default smoke)
 #   --skip-build        skip stage 1 (when a usable heavydb build already exists)
 #   --skip-data         skip stage 2
-#   --stages "1 2 3 4 5" run only the listed stages
+#   --stages "1 2 3 4 5" run only the listed stages (6 = rerun, 7 = microbenchmark; neither is in the default list)
 #   --heavydb-home DIR  heavydb source/build directory (default <this dir>/heavydb; may point to an existing build)
 #   --deps-prefix DIR   install prefix for the from-source dependencies (default /usr/local/mapd-deps)
 #   --jobs N            number of compile threads
@@ -93,6 +93,7 @@ has 3 && bash "$HB_ROOT/stages/03_cat_a.sh"
 has 4 && bash "$HB_ROOT/stages/04_cat_b.sh"
 has 5 && HB_QUERY_LIMIT="$CATC_LIMIT" bash "$HB_ROOT/stages/05_cat_c.sh"
 has 6 && bash "$HB_ROOT/stages/06_rerun.sh"     # only when asked for (./fix_results.sh); not in the default stage list
+has 7 && bash "$HB_ROOT/stages/07_microbench.sh"   # 120-query microbenchmark (./run_microbench.sh); not in the default stage list
 
 # ---------- Wrap-up ----------
 if sudo -n true 2>/dev/null; then sudo nvidia-smi -i "$GPU" -rgc >/dev/null 2>&1 || true

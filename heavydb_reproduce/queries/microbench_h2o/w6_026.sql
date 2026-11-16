@@ -1,0 +1,1 @@
+SELECT id1, v2 FROM groupby ORDER BY v2 DESC LIMIT 1000;

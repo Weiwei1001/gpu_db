@@ -1,0 +1,1 @@
+SELECT RegionID, COUNT(*) FROM t GROUP BY RegionID;

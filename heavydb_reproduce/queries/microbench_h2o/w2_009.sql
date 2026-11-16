@@ -1,0 +1,1 @@
+SELECT SUM(v1) FROM groupby WHERE v2 > 50;

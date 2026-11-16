@@ -7,7 +7,7 @@ For every query:
   3. power: ΔE/Δt time series in 100 ms bins (matching the NVML energy counter update period)
      a short query yields no samples within a single window, so amplify by sending it K times back to back to reach >=2 s, then sample
 """
-import argparse, csv, json, math, os, sys, time, threading
+import argparse, csv, json, math, os, re, sys, time, threading
 import statistics as st
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hbench as hb
@@ -49,6 +49,10 @@ ap.add_argument("--out", default=os.path.join(hb.RESULTS_BASE, "powersample.csv"
 ap.add_argument("--traces", default=os.path.join(hb.RESULTS_BASE, "traces"))
 ap.add_argument("--only", default="", help="run only these queries (comma-separated)")
 ap.add_argument("--reps", type=int, default=3)
+ap.add_argument("--server-count", action="store_true",
+                help="microbench: count result rows on the server instead of fetching them, keep an ORDER BY "
+                     "without LIMIT in the COUNT(*) wrap, and record whether the sort is in the Calcite plan")
+ap.add_argument("--screen", default=None, help="screening CSV with the passlist (default query_screen_<suite>.csv; 'none' = run all)")
 a = ap.parse_args()
 REPS = a.reps
 
@@ -56,9 +60,9 @@ ok, others = hb.gpu_guard()
 if not ok:
     print(f"!! other people's jobs {others} on GPU {hb.GPUS}", file=sys.stderr)
 
-scr = os.path.join(hb.RESULTS_BASE, f"query_screen_{a.suite}.csv")
+scr = a.screen or os.path.join(hb.RESULTS_BASE, f"query_screen_{a.suite}.csv")
 passlist = ({r["query"] for r in csv.DictReader(open(scr)) if r["ok"] == "True"}
-            if os.path.exists(scr) else None)
+            if scr != "none" and os.path.exists(scr) else None)
 qs = [q for q in hb.queries(a.suite) if passlist is None or q[0] in passlist]
 if a.only:
     want = set(a.only.split(","))
@@ -93,8 +97,18 @@ for name, q in qs:
       attempt += 1
       try:
           guard.check(f"before {name}")
-          nrows = sql.rows_returned(q, a.timeout)
-          qx = hb.Sql.count_wrap(q) if nrows > 10000 else q
+          sort_in_plan = ""
+          if a.server_count:
+              nrows = sql.count_rows(q, a.timeout)
+              qx = hb.Sql.count_wrap(q, keep_sort_rows=nrows) if nrows > 10000 else q
+              if re.search(r"\border\s+by\b", q, re.I):     # the measured statement must still sort
+                  plan = sql.explain(qx)               # RelOptUtil.toString of the Calcite plan
+                  sort_in_plan = "LogicalSort" in plan if "Logical" in plan else "unknown"
+                  if sort_in_plan is False:
+                      raise RuntimeError("ORDER BY missing from the plan of the measured statement")
+          else:
+              nrows = sql.rows_returned(q, a.timeout)
+              qx = hb.Sql.count_wrap(q) if nrows > 10000 else q
           for _ in range(3):                      # warm-up: pull the column data into GPU memory
               t_ms = sql.run(qx, a.timeout)
 
@@ -143,7 +157,7 @@ for name, q in qs:
               P_peak_W=round(max((s[1] for s in ser), default=0), 2),
               E_total_mJ=round(E_q, 3),
               E_dyn_mJ=round(E_q - p_idle * T_win / K * 1000, 3),
-              gpu_checked=gpu, error=""))
+              gpu_checked=gpu, error="", **({"sort_in_plan": sort_in_plan} if a.server_count else {})))
           r = rows[-1]
           print(f"  {name:6s} lat {r['lat_min_ms']:8.1f}/{r['lat_mean_ms']:8.1f} ms "
                 f"(wall {r['wall_mean_ms']:8.1f})  K={K:4d}  {len(ser):3d} samples  "

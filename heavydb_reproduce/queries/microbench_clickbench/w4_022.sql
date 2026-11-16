@@ -1,0 +1,1 @@
+SELECT UserID, COUNT(*) FROM t GROUP BY UserID;

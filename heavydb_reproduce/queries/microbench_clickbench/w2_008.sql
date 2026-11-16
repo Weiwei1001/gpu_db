@@ -1,0 +1,1 @@
+SELECT COUNT(*) FROM t WHERE EventDate >= 15901 AND EventDate < 15918;
